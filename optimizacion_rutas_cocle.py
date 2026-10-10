@@ -1,59 +1,68 @@
 """
 OPTIMIZACIÓN DE RUTAS TURÍSTICAS – PROVINCIA DE COCLÉ, PANAMÁ
-Algoritmo de Dijkstra | 29 Nodos | 3 Criterios | Menú Interactivo
-Universidad de Panamá – Facultad de Informática
+Algoritmo de Dijkstra | 29 nodos | 53 aristas | Menú interactivo
+Universidad de Panamá – Facultad de Ciencias Naturales y Exactas Licenciatura en Matemáticas
 
 7 DÍAS · 4-6 LUGARES POR DÍA · DATOS ESTIMADOS DESDE GOOGLE MAPS
 CRITERIO OFICIAL DEL PROYECTO: DISTANCIA (según indicación del asesor)
 
-VALIDACIONES IMPLEMENTADAS (Sección 3.6.1):
-a) Google Maps (simulación ±4%, tolerancia ±5%)
-b) Consistencia interna (subestructura óptima)
-c) Análisis de sensibilidad (3 criterios; distancia = criterio oficial)
+QUÉ HACE EL PROGRAMA
+  - Dijkstra (implementación propia, heap) calcula los caminos mínimos entre
+    TODOS los pares de nodos, para distancia, tiempo y costo.
+  - El ORDEN de visita de cada día se resuelve con búsqueda exhaustiva
+    (permutaciones, problema del viajante/TSP) sobre esas distancias mínimas,
+    saliendo y regresando a Penonomé (nodo 15). Dijkstra NO ordena visitas.
+  - La AGRUPACIÓN de lugares por día (DIAS_CONFIG) es manual, por zonas.
 
-PRUEBAS COMPUTACIONALES (Sección 3.6.3):
-a) Prueba de Caja Negra (manual, opción 5)
-b) Prueba de Integridad de Datos (automática)
-c) Prueba de Tiempo de Ejecución (Tabla 9)
+VALIDACIONES (Sección 3.6.1)
+  a) Validación externa REAL: se genera una plantilla CSV con una muestra de
+     aristas; tú anotas valores de una fuente independiente (OSRM/OpenRoute-
+     Service/Google Maps en otra fecha) y el programa calcula los errores.
+  b) Consistencia interna: subestructura óptima, TODOS los pares de nodos.
+  c) Sensibilidad: (i) ¿cambia la ruta si se optimiza por tiempo en vez de
+     distancia?  (ii) Monte Carlo: se perturban las distancias ±10% / ±20% y
+     se mide qué tan estable es el orden óptimo de cada día.
 
-────────────────────────────────────────────────────────────────────────────
-CORRECCIONES APLICADAS (revisión solicitada por James, sep-2026):
-1. El conteo de aristas hardcodeado en varios textos decía "49" cuando el
-   grafo real (ARISTAS_RAW) tiene 52 aristas. Se corrigió a valores dinámicos
-   (len(G.edges())) en vez de números fijos, para que nunca vuelva a
-   desincronizarse si se agregan/quitan nodos.
-2. Las estadísticas de cada día (distancia_km, tiempo_auto_min, costo_usd)
-   en DIAS_CONFIG eran valores fijos que no coincidían con lo que el propio
-   programa calculaba en vivo en la opción 3 del menú. Ahora se recalculan
-   en vivo, ida y vuelta a Penonomé, con el criterio oficial del proyecto
-   ("distancia") — así las dos pantallas siempre coinciden.
-3. La Tabla 9 (prueba de tiempo de ejecución) comparaba contra un grafo
-   aleatorio de (29,49) llamándolo "grafo real"; se corrigió a (29,52) y
-   además se agregó una medición directa sobre el grafo real G (no solo
-   sobre un grafo aleatorio del mismo tamaño).
-4. Se añadió la arista urbana (12, 14) entre la Iglesia San Juan Bautista
-   (ISJ) y el Balneario Las Mendozas (BLM), verificada en Google Maps
-   (1.0 km, 3 min). Esto corrige el rodeo innecesario del Día 2, que
-   bajó de 20.2 km a ~13-14 km, coincidiendo con Google Maps dentro
-   del ±15%.
+PRUEBAS COMPUTACIONALES (Sección 3.6.3)
+  a) Caja negra: manual (opción 5) y automática con tabla de casos (opción 9-2)
+  b) Integridad de datos: automática y real (opción 9-1)
+  c) Tiempo de ejecución (Tabla 9) (opción 9-3)
 
-NOTA METODOLÓGICA SOBRE EL COSTO:
-El criterio "costo" se define como distancia*0.15 de forma uniforme en TODAS
-las aristas. Al ser una transformación lineal constante, optimizar por costo
-da la misma ruta que optimizar por distancia (las diferencias observadas
-~3.6% se deben a redondeo en punto flotante). Por eso el criterio OFICIAL
-del proyecto es DISTANCIA. Tiempo y costo se incluyen como MÉTRICAS DE APOYO
-que el turista puede consultar, no como criterios independientes. Esto está
-documentado en el código y en el análisis de sensibilidad (opción 8c).
-────────────────────────────────────────────────────────────────────────────
+MODO SIN MENÚ (genera todas las tablas de una vez):
+     python rutas_cocle_dijkstra.py --pruebas
+
+NOTA SOBRE EL COSTO:
+  costo = distancia * COSTO_POR_KM (constante). Al ser una transformación
+  lineal, optimizar por costo da exactamente la misma ruta que por distancia.
+  Por eso el criterio OFICIAL es DISTANCIA; tiempo y costo son métricas de
+  apoyo. Justifica COSTO_POR_KM en la tesis (consumo del vehículo y precio
+  del combustible, con fuente y fecha).
 """
 
+import csv
 import heapq
 import os
-import sys
 import random
+import statistics
+import sys
 import time
 from itertools import permutations
+from math import radians, sin, cos, asin, sqrt
+
+
+# ── Consola: UTF-8 y colores ANSI (evita errores con emojis en Windows) ───────
+def _configurar_consola():
+    for flujo in (sys.stdout, sys.stderr):
+        try:
+            flujo.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+    if os.name == "nt":
+        os.system("")  # activa secuencias ANSI en Windows 10+
+
+
+_configurar_consola()
+
 
 # ── Verificar e instalar dependencias ─────────────────────────────────────────
 def verificar_dependencias():
@@ -65,20 +74,26 @@ def verificar_dependencias():
             faltantes.append(pkg)
     if faltantes:
         print(f"\n  Instalando dependencias: {', '.join(faltantes)} ...")
-        os.system(f"{sys.executable} -m pip install {' '.join(faltantes)} -q")
+        os.system(f'"{sys.executable}" -m pip install {" ".join(faltantes)} -q')
         print("  ¡Listo!\n")
+
 
 verificar_dependencias()
 
 import networkx as nx
 import matplotlib
 
+
 # ── Selección automática del backend ──────────────────────────────────────────
 def _seleccionar_backend():
-    if os.name == "nt":               return "TkAgg"
-    if sys.platform == "darwin":      return "TkAgg"
-    if "DISPLAY" in os.environ:       return "TkAgg"
+    if os.name == "nt":
+        return "TkAgg"
+    if sys.platform == "darwin":
+        return "TkAgg"
+    if "DISPLAY" in os.environ:
+        return "TkAgg"
     return "Agg"
+
 
 try:
     matplotlib.use(_seleccionar_backend())
@@ -91,8 +106,17 @@ except Exception:
 
 import matplotlib.patches as mpatches
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 0. CONSTANTES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+BASE = 15                      # Penonomé: punto de salida y regreso de cada día
+COSTO_POR_KM = 0.15            # USD/km (JUSTIFICAR en la tesis con fuente y fecha)
+CRITERIOS = ("distancia", "tiempo", "costo")
+TOL = 1e-3                     # tolerancia numérica al comparar matrices
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. DATOS DEL SISTEMA TURÍSTICO (29 NODOS)
@@ -132,14 +156,21 @@ ATRACTIVOS = {
     29: {"nombre": "Canopy Adventure",                "cod": "CAN", "tipo": "Aventura",         "puntaje": 25, "distrito": "Antón"},
 }
 
-# ARISTAS CON DATOS ESTIMADOS DESDE GOOGLE MAPS
+# Coordenadas reales (latitud, longitud) en grados decimales, por ID de nodo.
+# OPCIONAL pero recomendado (tu parte GIS): si las llenas, la prueba de
+# integridad verifica que ninguna distancia por carretera sea menor que la
+# distancia en línea recta. Ejemplo:  15: (8.5190, -80.3570),8
+# NO inventes valores: cópialos de tu capa GIS o de Google Maps.
+COORDENADAS = {}
+
+# ARISTAS CON DATOS ESTIMADOS DESDE GOOGLE MAPS: (origen, destino, km, minutos)
 ARISTAS_RAW = [
     # Penonomé (PEN) → Conexiones originales
-    (15, 17, 22.6, 25),   # PEN → ANT
-    (15, 10, 29.8, 31),   # PEN → SAC
-    (15, 16, 50.2, 46),   # PEN → AGU
+    (15, 17, 22.3, 27),   # PEN → ANT
+    (15, 10, 30.1, 33),   # PEN → SAC
+    (15, 16, 50.2, 49),   # PEN → AGU
     (15, 18, 18.4, 23),   # PEN → LAP
-    (15, 8, 4.4, 8),      # PEN → MHA
+    (15, 8, 4.1, 7),      # PEN → MHA
     (15, 12, 4.6, 9),     # PEN → ISJ
     (15, 14, 4.6, 9),     # PEN → BLM
     (15, 21, 42.9, 78),   # PEN → CGA
@@ -150,13 +181,13 @@ ARISTAS_RAW = [
     (17, 4, 19.8, 22),    # ANT → PBL
     (17, 5, 18.0, 24),    # ANT → PJH
     (17, 6, 37.6, 59),    # ANT → MAV
-    (17, 7, 39.8, 63),    # ANT → SMT
-    (17, 21, 40.5, 65),   # ANT → CGA
+    (17, 7, 35.3, 62),    # ANT → SMT
+    (17, 21, 40.5, 61),   # ANT → CGA
 
     # Playas (Conexiones costeras)
     (1, 2, 6.8, 11),      # PSC → PFA
     (2, 4, 8.4, 12),      # PFA → PBL
-    (4, 5, 24.0, 29),     # PBL → PJH
+    (4, 5, 22.0, 24),     # PBL → PJH
     (1, 5, 27.3, 32),     # PSC → PJH
 
     # Valle de Antón
@@ -171,7 +202,7 @@ ARISTAS_RAW = [
     # Aguadulce (AGU) → Conexiones originales
     (16, 10, 26.8, 27),   # AGU → SAC
     (16, 11, 2.8, 6),     # AGU → MSS
-    (16, 3, 2.6, 7),      # AGU → PES
+    (16, 3, 10.1, 16),      # AGU → PES
 
     # La Pintada (LAP) → Conexiones originales
     (18, 13, 34.2, 54),   # LAP → CLY
@@ -185,14 +216,14 @@ ARISTAS_RAW = [
     # NUEVOS NODOS - Penonomé
     (15, 22, 4.3, 8),     # PEN → MPE
     (8, 22, 1.5, 4),      # MHA → MPE
-    (22, 12, 0.5, 2),     # MPE → ISJ
+    (22, 12, 0.8, 3),     # MPE → ISJ
 
     # NUEVOS NODOS - La Pintada
     (18, 23, 0.8, 1),     # LAP → MLA
     (18, 24, 0.35, 2),    # LAP → BAL
     (23, 24, 1.1, 2),     # MLA → BAL
     (20, 23, 0.8, 1),     # PNC → MLA
-    (20, 24, 1.1, 2),     # PNC → BAL
+    (20, 24, 0.3, 1),     # PNC → BAL
 
     # NUEVOS NODOS - Natá
     (10, 25, 13.8, 15),   # SAC → ISA
@@ -201,23 +232,19 @@ ARISTAS_RAW = [
     (19, 26, 26.3, 35),   # NAT → ECO
 
     # NUEVOS NODOS - Aguadulce
-    (16, 27, 9.0, 14),    # AGU → SAL
-    (3, 27, 6.3, 8),      # PES → SAL
+    (16, 27, 8.7, 15),    # AGU → SAL
+    (3, 27, 1.4, 2),      # PES → SAL
     (27, 11, 7.0, 10),    # SAL → MSS
 
     # NUEVOS NODOS - Antón
     (17, 28, 33.7, 56),   # ANT → MAR
-    (17, 29, 34.5, 57),   # ANT → CAN
+    (17, 29, 39.1, 56),   # ANT → CAN
     (28, 7, 2.1, 5),      # MAR → SMT
-    (28, 29, 5.8, 12),    # MAR → CAN
+    (28, 29, 3.6, 9),    # MAR → CAN
     (29, 21, 5.8, 12),    # CAN → CGA
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # ARISTAS URBANAS ADICIONALES (verificadas en Google Maps)
-    # Incorporadas durante el proceso de validación del sistema.
-    # Corrigen el rodeo innecesario del Día 2 (Penonomé Histórico).
-    # ═══════════════════════════════════════════════════════════════════════
-    (12, 14, 1.0, 3),     # ISJ → BLM (Iglesia San Juan Bautista → Balneario Las Mendozas)
+    # Arista urbana adicional (Día 2)
+    (12, 14, 1.0, 3),     # ISJ → BLM
 ]
 
 COLORES_TIPO = {
@@ -235,148 +262,76 @@ COLORES_TIPO = {
     "Aventura":        "#E67E22",
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# POSICIONES — recalculadas con relajación por repulsión
-# ═══════════════════════════════════════════════════════════════════════════════
-
+# POSICIONES ESQUEMÁTICAS (NO geográficas, no a escala): solo para dibujar.
 POSICIONES = {
-    1:  (0.95, 0.2978),   # PSC  – Playa Santa Clara
-    2:  (0.9087, 0.1582), # PFA  – Playa Farallón
-    3:  (0.0669, 0.05),   # PES  – Playa El Salado
-    4:  (0.7873, 0.0871), # PBL  – Playa Blanca
-    5:  (0.6609, 0.1479), # PJH  – Playa Juan Hombrón
-    6:  (0.6452, 0.6373), # MAV  – Mercado Artesanía Valle Antón
-    7:  (0.7461, 0.7708), # SMT  – Serpentario
-    8:  (0.3431, 0.5761), # MHA  – Museo Hnos. Arias Madrid
-    9:  (0.0714, 0.6373), # PNT  – P.N. Omar Torrijos
-    10: (0.3238, 0.2871), # SAC  – Sitio Arqueológico El Caño
-    11: (0.1875, 0.259),  # MSS  – Museo Regional Stella Sierra
-    12: (0.5911, 0.4386), # ISJ  – Iglesia San Juan Bautista
-    13: (0.0852, 0.8172), # CLY  – El Chorro Las Yayas
-    14: (0.5051, 0.6505), # BLM  – Balneario Las Mendozas
-    15: (0.4694, 0.5092), # PEN  – Penonomé
-    16: (0.1923, 0.1129), # AGU  – Aguadulce
-    17: (0.7707, 0.3921), # ANT  – Antón
-    18: (0.2507, 0.8295), # LAP  – La Pintada
-    19: (0.1856, 0.4052), # NAT  – Natá
-    20: (0.1473, 0.948),  # PNC  – Parroquia Ntra. Sra. Candelaria
-    21: (0.6452, 0.9015), # CGA  – Cerro Gaital
-    22: (0.3525, 0.4302), # MPE  – Museo de Penonomé
-    23: (0.3294, 0.95),   # MLA  – Mercado Artesanías La Pintada
-    24: (0.2079, 0.6904), # BAL  – Balneario Los Algarrobos
-    25: (0.0517, 0.2278), # ISA  – Iglesia Santiago Apóstol
-    26: (0.05, 0.437),    # ECO  – Ecoparque Don Arcelio
-    27: (0.3311, 0.1054), # SAL  – Salinas de Aguadulce
-    28: (0.8643, 0.8476), # MAR  – Mariposario
-    29: (0.8272, 0.6521), # CAN  – Canopy Adventure
+    1:  (0.95, 0.2978),   2:  (0.9087, 0.1582), 3:  (0.0669, 0.05),
+    4:  (0.7873, 0.0871), 5:  (0.6609, 0.1479), 6:  (0.6452, 0.6373),
+    7:  (0.7461, 0.7708), 8:  (0.3431, 0.5761), 9:  (0.0714, 0.6373),
+    10: (0.3238, 0.2871), 11: (0.1875, 0.259),  12: (0.5911, 0.4386),
+    13: (0.0852, 0.8172), 14: (0.5051, 0.6505), 15: (0.4694, 0.5092),
+    16: (0.1923, 0.1129), 17: (0.7707, 0.3921), 18: (0.2507, 0.8295),
+    19: (0.1856, 0.4052), 20: (0.1473, 0.948),  21: (0.6452, 0.9015),
+    22: (0.3525, 0.4302), 23: (0.3294, 0.95),   24: (0.2079, 0.6904),
+    25: (0.0517, 0.2278), 26: (0.05, 0.437),    27: (0.3311, 0.1054),
+    28: (0.8643, 0.8476), 29: (0.8272, 0.6521),
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. RUTAS DE 7 DÍAS
-#    NOTA: distancia_km / tiempo_auto_min / costo_usd se recalculan en vivo
-#    en main() con recalcular_estadisticas_dias(), así que los valores de
-#    aquí abajo son solo un placeholder inicial (se sobrescriben al arrancar).
+#    distancia_km / tiempo_auto_min / costo_usd / orden_optimo se calculan en
+#    vivo en main() con recalcular_estadisticas_dias().
 # ═══════════════════════════════════════════════════════════════════════════════
 
 DIAS_CONFIG = {
-    1: {
-        "destinos": [1, 2, 4, 5, 17],   # PSC, PFA, PBL, PJH, ANT
-        "zona": "🌊 Playas de Antón",
-        "color": "#2E86C1",
+    1: {"destinos": [1, 2, 4, 5, 17],
+        "zona": "🌊 Playas de Antón", "color": "#2E86C1",
         "descripcion": "Recorrido por las playas más hermosas de la costa de Antón",
-        "frase": "🌅 El sol, la arena y el mar te esperan",
-        "nivel": "Fácil",
-        "distancia_km": 80.3,
-        "tiempo_auto_min": 101,
-        "costo_usd": 12.05
-    },
-    2: {
-        "destinos": [8, 22, 12, 14, 15], # MHA, MPE, ISJ, BLM, PEN
-        "zona": "🏛️ Penonomé Histórico",
-        "color": "#F39C12",
+        "frase": "🌅 El sol, la arena y el mar te esperan", "nivel": "Fácil"},
+    2: {"destinos": [8, 22, 12, 14, 15],
+        "zona": "🏛️ Penonomé Histórico", "color": "#F39C12",
         "descripcion": "Recorrido urbano por los tesoros históricos de Penonomé",
-        "frase": "🏛️ Descubre la historia de Coclé en cada esquina",
-        "nivel": "Fácil",
-        "distancia_km": 15.0,
-        "tiempo_auto_min": 31,
-        "costo_usd": 2.25
-    },
-    3: {
-        "destinos": [18, 20, 23, 24, 13, 9], # LAP, PNC, MLA, BAL, CLY, PNT
-        "zona": "⛰️ La Pintada - Montaña y Cultura",
-        "color": "#27AE60",
+        "frase": "🏛️ Descubre la historia de Coclé en cada esquina", "nivel": "Fácil"},
+    3: {"destinos": [18, 20, 23, 24, 13, 9],
+        "zona": "⛰️ La Pintada - Montaña y Cultura", "color": "#27AE60",
         "descripcion": "Aventura en la montaña: parroquia, mercado, balneario, cascada y parque",
-        "frase": "⛰️ La montaña te llama con sus cascadas y paisajes",
-        "nivel": "Alta",
-        "distancia_km": 61.7,
-        "tiempo_auto_min": 115,
-        "costo_usd": 9.26
-    },
-    4: {
-        "destinos": [10, 25, 26, 19],    # SAC, ISA, ECO, NAT
-        "zona": "🏺 Ruta Arqueológica de Natá",
-        "color": "#C0392B",
+        "frase": "⛰️ La montaña te llama con sus cascadas y paisajes", "nivel": "Alta"},
+    4: {"destinos": [10, 25, 26, 19],
+        "zona": "🏺 Ruta Arqueológica de Natá", "color": "#C0392B",
         "descripcion": "Viaje al pasado: El Caño, iglesia colonial, ecoparque y ciudad",
-        "frase": "🗿 Donde la historia precolombina cobra vida",
-        "nivel": "Media",
-        "distancia_km": 81.3,
-        "tiempo_auto_min": 94,
-        "costo_usd": 12.20
-    },
-    5: {
-        "destinos": [6, 7, 28, 21, 29],  # MAV, SMT, MAR, CGA, CAN
-        "zona": "🌿 Naturaleza de Antón",
-        "color": "#8E44AD",
+        "frase": "🗿 Donde la historia precolombina cobra vida", "nivel": "Media"},
+    5: {"destinos": [6, 7, 28, 21, 29],
+        "zona": "🌿 Naturaleza de Antón", "color": "#8E44AD",
         "descripcion": "Un día en el valle: mercado, serpentario, mariposario, cerro y canopy",
-        "frase": "🦋 Donde la naturaleza y la aventura se encuentran",
-        "nivel": "Media",
-        "distancia_km": 57.7,
-        "tiempo_auto_min": 72,
-        "costo_usd": 8.66
-    },
-    6: {
-        "destinos": [16, 3, 27, 11],     # AGU, PES, SAL, MSS
-        "zona": "🌅 Tesoros de Aguadulce",
-        "color": "#1ABC9C",
+        "frase": "🦋 Donde la naturaleza y la aventura se encuentran", "nivel": "Media"},
+    6: {"destinos": [16, 3, 27, 11],
+        "zona": "🌅 Tesoros de Aguadulce", "color": "#1ABC9C",
         "descripcion": "Un día completo: playa, salinas, museo y ciudad",
-        "frase": "🧂 Donde el mar y la historia se fusionan",
-        "nivel": "Fácil",
-        "distancia_km": 66.1,
-        "tiempo_auto_min": 71,
-        "costo_usd": 9.92
-    },
-    7: {
-        "destinos": [15, 18, 20, 23, 24], # PEN, LAP, PNC, MLA, BAL
-        "zona": "🎯 Circuito Integrador",
-        "color": "#E67E22",
+        "frase": "🧂 Donde el mar y la historia se fusionan", "nivel": "Fácil"},
+    7: {"destinos": [15, 18, 20, 23, 24],
+        "zona": "🎯 Circuito Integrador", "color": "#E67E22",
         "descripcion": "Un recorrido por lo mejor de Penonomé y La Pintada",
-        "frase": "🎯 Un viaje que une ciudades, historia y naturaleza",
-        "nivel": "Media",
-        "distancia_km": 20.4,
-        "tiempo_auto_min": 27,
-        "costo_usd": 3.06
-    },
+        "frase": "🎯 Un viaje que une ciudades, historia y naturaleza", "nivel": "Media"},
 }
+for _cfg in DIAS_CONFIG.values():
+    _cfg.update({"distancia_km": 0.0, "tiempo_auto_min": 0, "costo_usd": 0.0, "orden_optimo": None})
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. ALGORITMO DE DIJKSTRA
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def es_id_valido(x):
+    return isinstance(x, int) and x in ATRACTIVOS
+
 
 def construir_grafo():
     G = nx.Graph()
     for nid, data in ATRACTIVOS.items():
         G.add_node(nid, **data)
     for u, v, dist, tiempo in ARISTAS_RAW:
-        # NOTA METODOLÓGICA:
-        # El costo se calcula como distancia * 0.15 (tarifa uniforme
-        # estimada de combustible + desgaste por km). Al ser una
-        # transformación lineal de la distancia, optimizar por costo
-        # produce la MISMA ruta que optimizar por distancia. Por eso el
-        # proyecto reporta el costo como métrica informativa; el criterio
-        # oficial es DISTANCIA (indicación del asesor).
-        costo = round(dist * 0.15, 2)
-        G.add_edge(u, v, distancia=dist, tiempo=tiempo, costo=costo)
+        # Sin redondeo por arista: el costo es exactamente distancia*tarifa.
+        G.add_edge(u, v, distancia=dist, tiempo=tiempo, costo=dist * COSTO_POR_KM)
     return G
+
 
 def dijkstra(G, origen, criterio):
     INF = float('inf')
@@ -391,13 +346,13 @@ def dijkstra(G, origen, criterio):
             continue
         visitados.add(u)
         for v in G.neighbors(u):
-            peso = G[u][v][criterio]
-            alt = dist[u] + peso
+            alt = dist[u] + G[u][v][criterio]
             if alt < dist[v]:
                 dist[v] = alt
                 prev[v] = u
                 heapq.heappush(heap, (alt, v))
     return dist, prev
+
 
 def reconstruir_camino(prev, origen, destino):
     camino = []
@@ -408,23 +363,28 @@ def reconstruir_camino(prev, origen, destino):
     camino.reverse()
     return camino if camino and camino[0] == origen else []
 
+
 def calcular_todas_matrices(G):
     nodos = sorted(G.nodes())
-    matrices = {}
-    caminos = {}
-    for criterio in ["distancia", "tiempo", "costo"]:
-        mat = {}
-        cam = {}
+    matrices, caminos = {}, {}
+    for criterio in CRITERIOS:
+        mat, cam = {}, {}
         for origen in nodos:
             dist_min, prev = dijkstra(G, origen, criterio)
-            mat[origen] = {d: round(dist_min[d], 2) if dist_min[d] != float('inf') else None for d in nodos}
+            mat[origen] = {d: (round(dist_min[d], 4) if dist_min[d] != float('inf') else None) for d in nodos}
             cam[origen] = {d: reconstruir_camino(prev, origen, d) for d in nodos}
         matrices[criterio] = mat
         caminos[criterio] = cam
     return matrices, caminos
 
+
+def matriz_un_criterio(G, criterio):
+    """Matriz de distancias mínimas sin redondeo (para Monte Carlo)."""
+    return {o: dijkstra(G, o, criterio)[0] for o in G.nodes()}
+
+
 def ruta_optima_dia(destinos, matrices, criterio="distancia"):
-    BASE = 15
+    """TSP por fuerza bruta sobre distancias mínimas (Dijkstra), base = Penonomé."""
     destinos = [d for d in destinos if d != BASE]
     mat = matrices[criterio]
     mejor_costo = float('inf')
@@ -434,7 +394,7 @@ def ruta_optima_dia(destinos, matrices, criterio="distancia"):
         total = 0
         valida = True
         for i in range(len(secuencia) - 1):
-            c = mat[secuencia[i]][secuencia[i+1]]
+            c = mat[secuencia[i]][secuencia[i + 1]]
             if c is None:
                 valida = False
                 break
@@ -444,30 +404,27 @@ def ruta_optima_dia(destinos, matrices, criterio="distancia"):
             mejor_orden = list(perm)
     return mejor_orden, mejor_costo
 
+
 def recalcular_estadisticas_dias(matrices, criterio="distancia"):
-    """
-    Recalcula en vivo distancia_km / tiempo_auto_min / costo_usd
-    de cada día en DIAS_CONFIG, usando la ruta óptima de IDA Y VUELTA a
-    Penonomé (BASE=15) con el CRITERIO OFICIAL del proyecto (distancia).
-    Tiempo y costo se reportan como métricas complementarias de esa misma
-    ruta. Esto garantiza que la opción 4 ("ver todas las rutas") y la
-    opción 3 ("ruta óptima de un día") siempre muestren los mismos números
-    para el mismo día.
-    """
-    BASE = 15
+    """Recalcula distancia/tiempo/costo y guarda el ORDEN óptimo de cada día."""
     for dia, cfg in DIAS_CONFIG.items():
         destinos = [d for d in cfg["destinos"] if d != BASE]
         orden, _ = ruta_optima_dia(destinos, matrices, criterio)
         if orden is None:
-            print(f"  ⚠ No se pudo recalcular estadísticas del Día {dia} (ruta inválida).")
+            print(f"  ⚠ No se pudo recalcular el Día {dia} (ruta inválida).")
             continue
-        secuencia = [BASE] + orden + [BASE]
-        tot_d = sum(matrices["distancia"][secuencia[i]][secuencia[i+1]] for i in range(len(secuencia) - 1))
-        tot_t = sum(matrices["tiempo"][secuencia[i]][secuencia[i+1]] for i in range(len(secuencia) - 1))
-        tot_c = sum(matrices["costo"][secuencia[i]][secuencia[i+1]] for i in range(len(secuencia) - 1))
-        cfg["distancia_km"] = round(tot_d, 1)
-        cfg["tiempo_auto_min"] = round(tot_t)
-        cfg["costo_usd"] = round(tot_c, 2)
+        sec = [BASE] + orden + [BASE]
+        pares = list(zip(sec[:-1], sec[1:]))
+        cfg["orden_optimo"] = orden
+        cfg["distancia_km"] = round(sum(matrices["distancia"][a][b] for a, b in pares), 1)
+        cfg["tiempo_auto_min"] = round(sum(matrices["tiempo"][a][b] for a, b in pares))
+        cfg["costo_usd"] = round(sum(matrices["costo"][a][b] for a, b in pares), 2)
+
+
+def texto_ruta_dia(cfg):
+    orden = cfg["orden_optimo"] if cfg["orden_optimo"] else [d for d in cfg["destinos"] if d != BASE]
+    sec = [BASE] + orden + [BASE]
+    return " → ".join(ATRACTIVOS[n]["cod"] for n in sec)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. FUNCIONES DE VISUALIZACIÓN
@@ -475,41 +432,43 @@ def recalcular_estadisticas_dias(matrices, criterio="distancia"):
 
 _CONTADOR_GRAFICO = [0]
 
-def _mostrar(fig=None):
+
+def _mostrar(fig=None, nombre=None):
     if fig is None:
         fig = plt.gcf()
     _CONTADOR_GRAFICO[0] += 1
-    plt.show()
+    if matplotlib.get_backend().lower() == "agg":
+        archivo = nombre or f"grafo_{_CONTADOR_GRAFICO[0]}.png"
+        fig.savefig(archivo, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+        print(f"  ℹ Sin pantalla gráfica: imagen guardada como {archivo}")
+    else:
+        plt.show()
+
 
 def dibujar_grafo_completo(G, criterio="distancia", guardar=None):
     fig, ax = plt.subplots(figsize=(15, 11))
     ax.set_facecolor("#F0F4F8")
     fig.patch.set_facecolor("#E8EDF2")
 
-    for u, v, data in G.edges(data=True):
+    for u, v in G.edges():
         x0, y0 = POSICIONES[u]
         x1, y1 = POSICIONES[v]
         ax.plot([x0, x1], [y0, y1], color="#BBBBBB", linewidth=1.0, zorder=1, alpha=0.6)
 
-    RADIO_HUB = 0.024
-    RADIO_NORM = 0.017
-
+    RADIO_HUB, RADIO_NORM = 0.024, 0.017
     for nid in G.nodes():
         x, y = POSICIONES[nid]
         tipo = G.nodes[nid]["tipo"]
         color = COLORES_TIPO.get(tipo, "#999999")
         es_hub = tipo == "Hub/Ciudad"
         radio = RADIO_HUB if es_hub else RADIO_NORM
-        ax.add_patch(plt.Circle((x+0.003, y-0.003), radio, color="#00000015", zorder=3))
+        ax.add_patch(plt.Circle((x + 0.003, y - 0.003), radio, color="#00000015", zorder=3))
         ax.add_patch(plt.Circle((x, y), radio, color=color, zorder=4, linewidth=1.5, ec="white"))
-        fs = 8.5 if es_hub else 7
-        ax.text(x, y, G.nodes[nid]["cod"], ha="center", va="center", fontsize=fs,
-                fontweight="bold", color="white", zorder=5)
+        ax.text(x, y, G.nodes[nid]["cod"], ha="center", va="center",
+                fontsize=8.5 if es_hub else 7, fontweight="bold", color="white", zorder=5)
 
     nodos_con_nombre = [15, 17, 16, 18, 19, 1, 2, 4, 21, 13, 10, 9, 20]
-    for nid in G.nodes():
-        if nid not in nodos_con_nombre:
-            continue
+    for nid in nodos_con_nombre:
         x, y = POSICIONES[nid]
         nombre = G.nodes[nid]["nombre"]
         if len(nombre) > 22:
@@ -520,12 +479,10 @@ def dibujar_grafo_completo(G, criterio="distancia", guardar=None):
             lx, ly, ha = x - 0.035, y, "right"
         elif y > 0.82:
             lx, ly, ha = x, y + 0.038, "center"
-        elif y < 0.18:
-            lx, ly, ha = x, y - 0.038, "center"
         else:
             lx, ly, ha = x, y - 0.038, "center"
-        ax.text(lx, ly, nombre, ha=ha, va="center", fontsize=7,
-                fontweight="500", color="#3A3A3A", zorder=6,
+        ax.text(lx, ly, nombre, ha=ha, va="center", fontsize=7, fontweight="500",
+                color="#3A3A3A", zorder=6,
                 bbox=dict(boxstyle="round,pad=0.18", facecolor="white",
                           edgecolor="#DDDDDD", alpha=0.9, linewidth=0.4))
 
@@ -538,13 +495,11 @@ def dibujar_grafo_completo(G, criterio="distancia", guardar=None):
         mpatches.Patch(color="#27AE60", label="Parque/Montaña"),
         mpatches.Patch(color="#E67E22", label="Aventura"),
     ]
-    ax.legend(handles=leyenda, loc="lower left", fontsize=8.5,
-              framealpha=0.95, edgecolor="#AAAAAA", fancybox=True, ncol=2)
-
-    ax.set_title(
-        f"🌍 Grafo Turístico - Provincia de Coclé, Panamá\n"
-        f"{len(G.nodes())} Nodos · {len(G.edges())} Aristas | Criterio: {criterio.upper()}",
-        fontsize=13, fontweight="bold", color="#1F4E79", pad=14)
+    ax.legend(handles=leyenda, loc="lower left", fontsize=8.5, framealpha=0.95,
+              edgecolor="#AAAAAA", fancybox=True, ncol=2)
+    ax.set_title(f"Grafo turístico - Provincia de Coclé, Panamá (diagrama esquemático, no a escala)\n"
+                 f"{len(G.nodes())} nodos · {len(G.edges())} aristas",
+                 fontsize=13, fontweight="bold", color="#1F4E79", pad=14)
     ax.set_xlim(-0.06, 1.06)
     ax.set_ylim(-0.06, 1.06)
     ax.axis("off")
@@ -555,13 +510,12 @@ def dibujar_grafo_completo(G, criterio="distancia", guardar=None):
         plt.savefig(guardar, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         print(f"  ✔ Grafo guardado: {guardar}")
     else:
-        _mostrar(fig)
-    plt.close()
+        _mostrar(fig, f"grafo_completo_{criterio}.png")
+    plt.close(fig)
 
 
 def dibujar_grafo_dia(G, dia, matrices, caminos, criterio="distancia", guardar=None):
     cfg = DIAS_CONFIG[dia]
-    BASE = 15
     destinos = [d for d in cfg["destinos"] if d != BASE]
     color_dia = cfg["color"]
 
@@ -573,14 +527,14 @@ def dibujar_grafo_dia(G, dia, matrices, caminos, criterio="distancia", guardar=N
     secuencia = [BASE] + orden + [BASE]
     nodos_ruta = set(secuencia)
     segmentos_dir = []
-
     for i in range(len(secuencia) - 1):
-        seg = caminos[criterio][secuencia[i]][secuencia[i+1]]
-        for j in range(len(seg)-1):
-            segmentos_dir.append((seg[j], seg[j+1]))
+        seg = caminos[criterio][secuencia[i]][secuencia[i + 1]]
+        for j in range(len(seg) - 1):
+            segmentos_dir.append((seg[j], seg[j + 1]))
         nodos_ruta.update(seg)
 
     pos_sub = {n: POSICIONES[n] for n in nodos_ruta}
+    unidad = {"distancia": "km", "tiempo": "min", "costo": "USD"}[criterio]
 
     fig, ax = plt.subplots(figsize=(12, 9.5))
     ax.set_facecolor("#F0F4F8")
@@ -592,56 +546,49 @@ def dibujar_grafo_dia(G, dia, matrices, caminos, criterio="distancia", guardar=N
             x1, y1 = pos_sub[v]
             ax.plot([x0, x1], [y0, y1], color="#DDDDDD", linewidth=0.7, alpha=0.5, zorder=1)
 
+    def _mas_cercano(px, py):
+        return min(((px - ox) ** 2 + (py - oy) ** 2) ** 0.5 for ox, oy in pos_sub.values())
+
     ya_etiquetado = set()
     RADIO_ETIQ_LIBRE = 0.052
     for u, v in segmentos_dir:
         x0, y0 = pos_sub[u]
         x1, y1 = pos_sub[v]
         ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
-            arrowprops=dict(arrowstyle="-|>", color=color_dia, lw=2.2,
-                            connectionstyle="arc3,rad=0.05", mutation_scale=17),
-            zorder=3)
-
+                    arrowprops=dict(arrowstyle="-|>", color=color_dia, lw=2.2,
+                                    connectionstyle="arc3,rad=0.05", mutation_scale=17),
+                    zorder=3)
         par = tuple(sorted([u, v]))
         if par not in ya_etiquetado and G.has_edge(u, v):
             val = G[u][v][criterio]
-            unidad_sym = {"distancia": "km", "tiempo": "min", "costo": "$"}[criterio]
-            txt = f"${val:.2f}" if criterio == "costo" else f"{val}{unidad_sym}"
-            mx, my = (x0+x1)/2, (y0+y1)/2
-            dx, dy = (x1 - x0), (y1 - y0)
-            largo = (dx**2 + dy**2) ** 0.5 or 1e-6
+            txt = f"{val:.2f} {unidad}" if criterio == "costo" else f"{val:g} {unidad}"
+            mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+            dx, dy = x1 - x0, y1 - y0
+            largo = (dx ** 2 + dy ** 2) ** 0.5 or 1e-6
             perp_x, perp_y = -dy / largo, dx / largo
             offset = 0.040 if largo > 0.09 else 0.062
             lx, ly = mx + perp_x * offset, my + perp_y * offset
-
-            def _mas_cercano(px, py):
-                return min(((px-nx)**2 + (py-ny)**2) ** 0.5 for nx, ny in pos_sub.values())
-
             if _mas_cercano(lx, ly) < RADIO_ETIQ_LIBRE:
+                encontrado = False
                 for signo in (1, -1):
                     for extra in (0.030, 0.055, 0.080):
                         lx2 = mx + perp_x * signo * (offset + extra)
                         ly2 = my + perp_y * signo * (offset + extra)
                         if _mas_cercano(lx2, ly2) >= RADIO_ETIQ_LIBRE:
                             lx, ly = lx2, ly2
+                            encontrado = True
                             break
-                    else:
-                        continue
-                    break
-
+                    if encontrado:
+                        break
             ax.text(lx, ly, txt, ha="center", va="center", fontsize=7.5,
                     fontweight="bold", color=color_dia, zorder=5,
                     bbox=dict(boxstyle="round,pad=0.15", facecolor="white",
                               edgecolor=color_dia, alpha=0.95, linewidth=0.6))
             ya_etiquetado.add(par)
 
-    RADIO_BASE = 0.036
-    RADIO_DEST = 0.028
-    RADIO_TRANS = 0.018
-
+    RADIO_BASE, RADIO_DEST, RADIO_TRANS = 0.036, 0.028, 0.018
     nodos_destino = set(destinos)
     nodos_transito = nodos_ruta - nodos_destino - {BASE}
-
     orden_visita = {}
     for i, nodo in enumerate(secuencia):
         if nodo != BASE and nodo not in orden_visita:
@@ -656,7 +603,7 @@ def dibujar_grafo_dia(G, dia, matrices, caminos, criterio="distancia", guardar=N
             radio, ec, lw = RADIO_DEST, color_dia, 2.0
         else:
             cn, radio, ec, lw = "#AAAAAA", RADIO_TRANS, "#888888", 1.2
-        ax.add_patch(plt.Circle((x+0.003, y-0.003), radio, color="#00000015", zorder=3))
+        ax.add_patch(plt.Circle((x + 0.003, y - 0.003), radio, color="#00000015", zorder=3))
         ax.add_patch(plt.Circle((x, y), radio, color=cn, ec=ec, linewidth=lw, zorder=4))
         cod = G.nodes[nid]["cod"] + ("*" if nid in nodos_transito else "")
         if nid in orden_visita:
@@ -680,16 +627,14 @@ def dibujar_grafo_dia(G, dia, matrices, caminos, criterio="distancia", guardar=N
             lx, ly, ha = x, y + 0.05, "center"
         else:
             lx, ly, ha = x, y - 0.05, "center"
-        ax.text(lx, ly, nombre, ha=ha, va="center", fontsize=7.5,
-                fontweight="500", color="#333333", zorder=6,
+        ax.text(lx, ly, nombre, ha=ha, va="center", fontsize=7.5, fontweight="500",
+                color="#333333", zorder=6,
                 bbox=dict(boxstyle="round,pad=0.15", facecolor="white",
                           edgecolor=color_dia if nid in nodos_destino else "#CCCCCC",
                           alpha=0.92, linewidth=0.5))
 
     ruta_str = " → ".join(G.nodes[n]["cod"] for n in secuencia)
-    unidad = {"distancia": "km", "tiempo": "min", "costo": "$"}[criterio]
-    ax.text(0.01, 0.01,
-            f"📌 Ruta óptima ({criterio})\n{ruta_str}\nTotal: {costo_total:.1f} {unidad}",
+    ax.text(0.01, 0.01, f"Ruta óptima ({criterio})\n{ruta_str}\nTotal: {costo_total:.1f} {unidad}",
             transform=ax.transAxes, fontsize=8.5, color="#1A1A1A", va="bottom",
             bbox=dict(boxstyle="round,pad=0.35", facecolor="white",
                       edgecolor=color_dia, alpha=0.96, linewidth=1.1))
@@ -699,13 +644,12 @@ def dibujar_grafo_dia(G, dia, matrices, caminos, criterio="distancia", guardar=N
         mpatches.Patch(color=color_dia, label="Ruta óptima"),
         mpatches.Patch(color="#AAAAAA", label="Tránsito (*)"),
     ]
-    ax.legend(handles=leyenda, loc="lower right", fontsize=8.5,
-              framealpha=0.95, edgecolor="#AAAAAA", fancybox=True)
+    ax.legend(handles=leyenda, loc="lower right", fontsize=8.5, framealpha=0.95,
+              edgecolor="#AAAAAA", fancybox=True)
 
-    ax.set_title(
-        f"📅 DÍA {dia} — {cfg['zona']}\n"
-        f"Criterio: {criterio.upper()} | {len(destinos)} destinos",
-        fontsize=13, fontweight="bold", color=color_dia, pad=14)
+    zona_limpia = cfg["zona"].split(" ", 1)[1] if " " in cfg["zona"] else cfg["zona"]
+    ax.set_title(f"DÍA {dia} — {zona_limpia}\nCriterio: {criterio.upper()} | {len(destinos)} destinos (diagrama esquemático)",
+                 fontsize=13, fontweight="bold", color=color_dia, pad=14)
 
     xs = [p[0] for p in pos_sub.values()]
     ys = [p[1] for p in pos_sub.values()]
@@ -720,344 +664,580 @@ def dibujar_grafo_dia(G, dia, matrices, caminos, criterio="distancia", guardar=N
         plt.savefig(guardar, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         print(f"  ✔ Grafo Día {dia} guardado: {guardar}")
     else:
-        _mostrar(fig)
-    plt.close()
-
+        _mostrar(fig, f"Grafo_Dia_{dia}_{criterio}.png")
+    plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 5. VALIDACIONES COMPLETAS (Sección 3.6.1)
+# 5. PRUEBAS Y VALIDACIONES REALES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def validar_con_google_maps_simulado(G, tramos_a_validar=None):
-    """
-    a) Validación por Comparación con Google Maps (SIMULADA)
-    Tolerancia: ±5%
-    """
-    if tramos_a_validar is None:
-        tramos_a_validar = list(G.edges())
-
-    resultados = []
-    tolerancia = 0.05
-
-    print("\n" + "="*70)
-    print("  a) VALIDACIÓN CON GOOGLE MAPS (SIMULADA) - Tolerancia ±5%")
-    print("  NOTA: Valores de Google Maps simulados con variación de ±4%")
-    print("="*70)
-    print(f"  {'Tramo':<20} {'Algoritmo':>15} {'Google':>15} {'Diferencia':>15} {'Estado':>10}")
-    print("-"*70)
-
-    random.seed(42)
-
-    for u, v in tramos_a_validar:
-        alg_dist = G[u][v]['distancia']
-        alg_time = G[u][v]['tiempo']
-
-        factor_dist = 1 + random.uniform(-0.04, 0.04)
-        factor_time = 1 + random.uniform(-0.04, 0.04)
-        google_dist = round(alg_dist * factor_dist, 1)
-        google_time = round(alg_time * factor_time, 1)
-
-        diff_dist = abs(alg_dist - google_dist) / google_dist if google_dist > 0 else 0
-        diff_time = abs(alg_time - google_time) / google_time if google_time > 0 else 0
-        ok_dist = diff_dist <= tolerancia
-        ok_time = diff_time <= tolerancia
-        ok = ok_dist and ok_time
-
-        u_cod = G.nodes[u]['cod']
-        v_cod = G.nodes[v]['cod']
-
-        print(f"  {u_cod}→{v_cod:<16} "
-              f"{alg_dist:>6.1f}km/{alg_time:>3.0f}min "
-              f"{google_dist:>6.1f}km/{google_time:>3.0f}min "
-              f"{diff_dist*100:>6.1f}%/{diff_time*100:>5.1f}% "
-              f"{'✅' if ok else '❌':>8}")
-
-        resultados.append({
-            'tramo': f"{u_cod}→{v_cod}",
-            'algoritmo': {'distancia': alg_dist, 'tiempo': alg_time},
-            'google': {'distancia': google_dist, 'tiempo': google_time},
-            'diferencia': {'distancia': diff_dist*100, 'tiempo': diff_time*100},
-            'valido': ok
-        })
-
-    total = len(resultados)
-    aprobados = sum(1 for r in resultados if r['valido'])
-    print("-"*70)
-    print(f"  RESULTADO: {aprobados}/{total} tramos validados ({aprobados/total*100:.1f}%)\n")
-
-    return resultados
+def _haversine_km(a, b):
+    (lat1, lon1), (lat2, lon2) = a, b
+    p1, p2 = radians(lat1), radians(lat2)
+    h = sin((p2 - p1) / 2) ** 2 + cos(p1) * cos(p2) * sin(radians(lon2 - lon1) / 2) ** 2
+    return 2 * 6371.0088 * asin(sqrt(h))
 
 
-def validar_consistencia_interna(G, matrices, caminos):
-    """
-    b) Validación por Consistencia Interna (Subestructura óptima)
-    """
-    print("\n" + "="*70)
-    print("  b) VALIDACIÓN POR CONSISTENCIA INTERNA (Subestructura óptima)")
-    print("="*70)
-
-    nodos = list(G.nodes())
-    errores = []
-    validaciones = 0
-
-    for criterio in ["distancia", "tiempo", "costo"]:
-        print(f"\n  Criterio: {criterio.upper()}")
-        cam = caminos[criterio]
-
-        for origen in nodos[:6]:
-            for destino in nodos[:6]:
-                if origen == destino:
-                    continue
-                camino_completo = cam[origen][destino]
-                if not camino_completo or len(camino_completo) < 3:
-                    continue
-                for i in range(len(camino_completo) - 1):
-                    for j in range(i + 1, len(camino_completo)):
-                        sub_origen = camino_completo[i]
-                        sub_destino = camino_completo[j]
-                        subcamino_esperado = camino_completo[i:j+1]
-                        subcamino_calc = cam[sub_origen][sub_destino]
-                        validaciones += 1
-                        if subcamino_calc != subcamino_esperado:
-                            errores.append({
-                                'criterio': criterio,
-                                'sub_origen': sub_origen,
-                                'sub_destino': sub_destino,
-                            })
-
-    print(f"\n  Validaciones realizadas: {validaciones}")
-    if errores:
-        print(f"  ❌ Errores encontrados: {len(errores)}")
-        for err in errores[:3]:
-            u_cod = G.nodes[err['sub_origen']]['cod']
-            v_cod = G.nodes[err['sub_destino']]['cod']
-            print(f"    - Subcamino {u_cod}→{v_cod} no es óptimo en {err['criterio']}")
-    else:
-        print("  ✅ Todos los subcaminos verificados son óptimos (propiedad de subestructura óptima cumplida)")
-
-    print("-"*70)
-    return len(errores) == 0
+def _cod(n):
+    return ATRACTIVOS[n]["cod"]
 
 
-def analisis_sensibilidad(G, matrices, caminos):
-    """
-    c) Análisis de Sensibilidad (3 criterios)
-    Compara cómo cambian las rutas al optimizar por distancia, tiempo o costo.
-    El criterio oficial del proyecto es DISTANCIA.
-    """
-    pares_prueba = [(15, 17), (17, 1), (18, 13), (15, 21), (19, 10)]
+# ── 5.1 Integridad de datos (3.6.3.b) ─────────────────────────────────────────
+def prueba_integridad_datos(G, verbose=True):
+    """Devuelve (errores, advertencias). Errores = datos inválidos.
+    Advertencias = datos sospechosos que debes revisar/remedir."""
+    errores, advertencias = [], []
+    ids = set(ATRACTIVOS)
 
-    print("\n" + "="*70)
-    print("  c) ANÁLISIS DE SENSIBILIDAD - Comparación de 3 criterios")
-    print("  NOTA: criterio oficial = DISTANCIA. Tiempo y costo son")
-    print("  métricas de apoyo. Como costo = distancia × 0.15, las rutas")
-    print("  por distancia y costo coinciden por definición.")
-    print("="*70)
+    # Nodos
+    if G.number_of_nodes() != len(ATRACTIVOS):
+        errores.append(f"El grafo tiene {G.number_of_nodes()} nodos y el inventario {len(ATRACTIVOS)}.")
+    for nid in ATRACTIVOS:
+        if nid not in POSICIONES:
+            errores.append(f"Nodo {nid} sin posición de dibujo.")
+        if ATRACTIVOS[nid]["tipo"] not in COLORES_TIPO:
+            errores.append(f"Nodo {nid}: tipo '{ATRACTIVOS[nid]['tipo']}' sin color definido.")
+    codigos = [d["cod"] for d in ATRACTIVOS.values()]
+    if len(set(codigos)) != len(codigos):
+        errores.append("Hay códigos de nodo repetidos.")
 
-    resultados = []
+    # Aristas
+    vistas = set()
+    for u, v, d, t in ARISTAS_RAW:
+        if u not in ids or v not in ids:
+            errores.append(f"Arista ({u},{v}) usa un ID inexistente.")
+            continue
+        if u == v:
+            errores.append(f"Arista ({_cod(u)}) es un autolazo.")
+        clave = frozenset((u, v))
+        if clave in vistas:
+            errores.append(f"Arista duplicada {_cod(u)}-{_cod(v)}.")
+        vistas.add(clave)
+        if d <= 0 or t <= 0:
+            errores.append(f"Arista {_cod(u)}-{_cod(v)} con peso no positivo (d={d}, t={t}).")
+    if len(vistas) != G.number_of_edges():
+        errores.append(f"Aristas únicas en datos ({len(vistas)}) ≠ aristas del grafo ({G.number_of_edges()}).")
 
-    for origen, destino in pares_prueba:
-        u_cod = G.nodes[origen]['cod']
-        v_cod = G.nodes[destino]['cod']
+    # Conectividad
+    if not nx.is_connected(G):
+        comps = [sorted(_cod(n) for n in c) for c in nx.connected_components(G)]
+        errores.append(f"El grafo NO es conexo. Componentes: {comps}")
 
-        print(f"\n  Ruta: {u_cod} → {v_cod}")
-        print(f"  {'Criterio':<12} {'Distancia':>12} {'Tiempo':>12} {'Costo':>12} {'Ruta':>30}")
-        print("-"*80)
+    # Días
+    cubiertos = set()
+    for dia, cfg in DIAS_CONFIG.items():
+        dest = cfg["destinos"]
+        if any(d not in ids for d in dest):
+            errores.append(f"Día {dia}: hay IDs de destino inexistentes.")
+            continue
+        if len(set(dest)) != len(dest):
+            errores.append(f"Día {dia}: destinos repetidos.")
+        if not 4 <= len(dest) <= 6:
+            errores.append(f"Día {dia}: tiene {len(dest)} lugares (se esperan 4 a 6).")
+        if BASE in dest:
+            advertencias.append(f"Día {dia}: incluye a Penonomé (base) como destino; solo hay "
+                                f"{len(dest) - 1} paradas distintas a la base.")
+        cubiertos.update(dest)
+    sin_dia = sorted(_cod(n) for n in ids - cubiertos)
+    if sin_dia:
+        advertencias.append(f"Atractivos que no aparecen en ningún día: {sin_dia}")
 
-        for criterio in ["distancia", "tiempo", "costo"]:
-            valor = matrices[criterio][origen][destino]
-            camino = caminos[criterio][origen][destino]
-            ruta_str = " → ".join(G.nodes[n]['cod'] for n in camino) if camino else "N/A"
+    # Velocidad implícita
+    for u, v, data in G.edges(data=True):
+        if data["distancia"] >= 2:
+            vel = data["distancia"] / (data["tiempo"] / 60)
+            if vel < 10 or vel > 110:
+                advertencias.append(f"Arista {_cod(u)}-{_cod(v)}: velocidad implícita {vel:.0f} km/h (¿dato correcto?)")
 
-            if criterio == "distancia":
-                print(f"  {'Distancia':<12} {valor:>11.1f}km {'---':>12} {'---':>12} {ruta_str:>30}")
-            elif criterio == "tiempo":
-                print(f"  {'Tiempo':<12} {'---':>12} {valor:>11.0f}min {'---':>12} {ruta_str:>30}")
-            else:
-                print(f"  {'Costo':<12} {'---':>12} {'---':>12} ${valor:>10.2f} {ruta_str:>30}")
+    # Aristas dominadas
+    for u, v, data in G.edges(data=True):
+        for crit in ("distancia", "tiempo"):
+            H = G.copy()
+            H.remove_edge(u, v)
+            try:
+                alt = nx.dijkstra_path_length(H, u, v, weight=crit)
+                camino = nx.dijkstra_path(H, u, v, weight=crit)
+            except nx.NetworkXNoPath:
+                continue
+            if alt < data[crit] - 1e-9:
+                advertencias.append(
+                    f"Arista {_cod(u)}-{_cod(v)} ({crit}={data[crit]:g}) es MÁS LARGA que el camino alterno "
+                    f"{' → '.join(_cod(n) for n in camino)} ({alt:g}). Vuelve a medirla.")
 
-        ruta_dist = caminos["distancia"][origen][destino]
-        ruta_time = caminos["tiempo"][origen][destino]
-        ruta_cost = caminos["costo"][origen][destino]
-        misma_ruta = (ruta_dist == ruta_time == ruta_cost)
+    # Coordenadas (opcional)
+    if COORDENADAS:
+        faltan = sorted(_cod(n) for n in ids if n not in COORDENADAS)
+        if faltan:
+            advertencias.append(f"COORDENADAS incompleto; faltan: {faltan}")
+        for u, v, data in G.edges(data=True):
+            if u in COORDENADAS and v in COORDENADAS:
+                h = _haversine_km(COORDENADAS[u], COORDENADAS[v])
+                if h > data["distancia"] + 0.05:
+                    errores.append(f"Arista {_cod(u)}-{_cod(v)}: carretera {data['distancia']} km < línea recta {h:.2f} km (imposible).")
+                elif h > 0.5 and data["distancia"] / h > 3:
+                    advertencias.append(f"Arista {_cod(u)}-{_cod(v)}: carretera/línea recta = {data['distancia'] / h:.1f} (muy sinuosa).")
 
-        print("-"*80)
-        if misma_ruta:
-            print("  ℹ️  Los 3 criterios producen la misma ruta óptima.")
+    if verbose:
+        print("\n" + "=" * 70)
+        print("  PRUEBA DE INTEGRIDAD DE DATOS (3.6.3.b)")
+        print("=" * 70)
+        print(f"  Nodos: {G.number_of_nodes()} | Aristas: {G.number_of_edges()} | Conexo: {nx.is_connected(G)}")
+        print(f"  Coordenadas para prueba de línea recta: {'sí' if COORDENADAS else 'NO (COORDENADAS vacío, prueba omitida)'}")
+        if errores:
+            print(f"\n  ❌ ERRORES ({len(errores)}):")
+            for e in errores:
+                print(f"    - {e}")
         else:
-            print("  ⚠️  Los criterios producen rutas diferentes.")
-
-        resultados.append({
-            'origen': u_cod,
-            'destino': v_cod,
-            'distancia': matrices["distancia"][origen][destino],
-            'tiempo': matrices["tiempo"][origen][destino],
-            'costo': matrices["costo"][origen][destino],
-            'misma_ruta': misma_ruta
-        })
-
-    print("\n" + "="*70)
-    print("  RESUMEN DEL ANÁLISIS DE SENSIBILIDAD")
-    print("="*70)
-    print(f"  {'Ruta':<12} {'Dist (km)':>12} {'Time (min)':>12} {'Costo ($)':>12} {'Misma ruta':>12}")
-    print("-"*60)
-    for r in resultados:
-        misma = "✅ Sí" if r['misma_ruta'] else "❌ No"
-        print(f"  {r['origen']}→{r['destino']:<8} "
-              f"{r['distancia']:>11.1f} "
-              f"{r['tiempo']:>11.0f} "
-              f"${r['costo']:>10.2f} "
-              f"{misma:>12}")
-
-    return resultados
+            print("\n  ✅ Sin errores de integridad.")
+        if advertencias:
+            print(f"\n  ⚠️  ADVERTENCIAS ({len(advertencias)}) – revisar/remedir, no son fallos del código:")
+            for a in advertencias:
+                print(f"    - {a}")
+        print("=" * 70 + "\n")
+    return errores, advertencias
 
 
-def ejecutar_validaciones_completas(G, matrices, caminos):
-    """
-    Ejecuta TODAS las validaciones del marco metodológico (Sección 3.6.1)
-    """
-    print("\n" + "█"*70)
-    print("  VALIDACIÓN COMPLETA DEL SISTEMA (Sección 3.6.1)")
-    print("  DATOS ESTIMADOS A PARTIR DE MEDICIONES EN GOOGLE MAPS")
-    print("█"*70)
+# ── 5.2 Verificación del algoritmo contra implementaciones independientes ────
+def verificacion_algoritmo(G, matrices, caminos, verbose=True):
+    """Compara TODAS las matrices contra networkx (Dijkstra) y Floyd-Warshall,
+    valida cada camino reconstruido, simetría, diagonal e inecuación triangular."""
+    nodos = sorted(G.nodes())
+    fallos, chequeos = [], 0
+    for crit in CRITERIOS:
+        ref = dict(nx.all_pairs_dijkstra_path_length(G, weight=crit))
+        fw = nx.floyd_warshall(G, weight=crit)
+        mat, cam = matrices[crit], caminos[crit]
+        for u in nodos:
+            if abs(mat[u][u]) > TOL:
+                fallos.append(f"[{crit}] diagonal {_cod(u)} ≠ 0")
+            for v in nodos:
+                chequeos += 1
+                m = mat[u][v]
+                if m is None or abs(m - ref[u][v]) > TOL or abs(m - fw[u][v]) > TOL:
+                    fallos.append(f"[{crit}] {_cod(u)}→{_cod(v)}: propio={m}, networkx={ref[u][v]:.4f}, FW={fw[u][v]:.4f}")
+                    continue
+                if abs(m - mat[v][u]) > TOL:
+                    fallos.append(f"[{crit}] asimetría {_cod(u)}↔{_cod(v)}")
+                p = cam[u][v]
+                if not p or p[0] != u or p[-1] != v:
+                    fallos.append(f"[{crit}] camino mal formado {_cod(u)}→{_cod(v)}")
+                    continue
+                if any(not G.has_edge(p[i], p[i + 1]) for i in range(len(p) - 1)):
+                    fallos.append(f"[{crit}] camino {_cod(u)}→{_cod(v)} usa una arista inexistente")
+                    continue
+                suma = sum(G[p[i]][p[i + 1]][crit] for i in range(len(p) - 1))
+                if abs(suma - m) > TOL:
+                    fallos.append(f"[{crit}] suma del camino {_cod(u)}→{_cod(v)} ({suma:.4f}) ≠ matriz ({m})")
+        for u in nodos:
+            for v in nodos:
+                for w in nodos:
+                    chequeos += 1
+                    if mat[u][v] > mat[u][w] + mat[w][v] + TOL:
+                        fallos.append(f"[{crit}] triangular violada {_cod(u)}→{_cod(v)} vía {_cod(w)}")
+    if verbose:
+        print("\n" + "=" * 70)
+        print("  VERIFICACIÓN DEL ALGORITMO vs networkx y Floyd-Warshall (3 criterios)")
+        print("=" * 70)
+        print(f"  Comprobaciones realizadas: {chequeos}")
+        if fallos:
+            print(f"  ❌ Fallos: {len(fallos)}")
+            for f in fallos[:10]:
+                print(f"    - {f}")
+        else:
+            print("  ✅ Todas las matrices y caminos coinciden con las implementaciones independientes.")
+        print("=" * 70 + "\n")
+    return len(fallos) == 0, chequeos
 
-    resultados_google = validar_con_google_maps_simulado(G)
-    consistencia_ok = validar_consistencia_interna(G, matrices, caminos)
-    resultados_sensibilidad = analisis_sensibilidad(G, matrices, caminos)
 
-    print("\n" + "█"*70)
-    print("  RESUMEN DE VALIDACIONES")
-    print("█"*70)
+def tabla_casos_caja_negra(G, matrices, caminos, archivo="caja_negra_resultados.csv"):
+    """Tabla de casos de prueba documentada (3.6.3.a), criterio distancia."""
+    nodos = sorted(G.nodes())
+    lejano = max(((u, v) for u in nodos for v in nodos if u < v),
+                 key=lambda p: matrices["distancia"][p[0]][p[1]])
+    pares = [(15, 8), (15, 17), (18, 20), (15, 21), (1, 7), (19, 26), (18, 9),
+             (3, 11), (5, 29), (20, 24), lejano]
+    filas = []
+    print("\n" + "=" * 96)
+    print("  PRUEBA DE CAJA NEGRA AUTOMÁTICA (3.6.3.a) – criterio DISTANCIA (km)")
+    print("=" * 96)
+    print(f"  {'#':<3} {'Caso':<22} {'Esperado':>9} {'Obtenido':>9} {'Resultado':>10}  Ruta obtenida")
+    print("-" * 96)
+    n = 0
+    for u, v in pares:
+        n += 1
+        esperado = nx.dijkstra_path_length(G, u, v, weight="distancia")
+        obtenido = matrices["distancia"][u][v]
+        ok = abs(esperado - obtenido) <= TOL
+        ruta = " → ".join(_cod(x) for x in caminos["distancia"][u][v])
+        caso = f"{_cod(u)} → {_cod(v)}" + (" (más lejano)" if (u, v) == lejano else "")
+        print(f"  {n:<3} {caso:<22} {esperado:>9.2f} {obtenido:>9.2f} {'✅ OK' if ok else '❌ FALLA':>10}  {ruta}")
+        filas.append([n, caso, round(esperado, 4), round(obtenido, 4), "OK" if ok else "FALLA", ruta])
+    # Casos límite
+    n += 1
+    ok = abs(matrices["distancia"][15][15]) <= TOL
+    print(f"  {n:<3} {'origen = destino':<22} {0:>9.2f} {matrices['distancia'][15][15]:>9.2f} {'✅ OK' if ok else '❌ FALLA':>10}  PEN")
+    filas.append([n, "origen = destino", 0, matrices["distancia"][15][15], "OK" if ok else "FALLA", "PEN"])
+    for malo in (0, 30):
+        n += 1
+        ok = not es_id_valido(malo)
+        print(f"  {n:<3} {'ID inválido ' + str(malo):<22} {'rechazar':>9} {'rechaza' if ok else 'acepta':>9} {'✅ OK' if ok else '❌ FALLA':>10}  -")
+        filas.append([n, f"ID inválido {malo}", "rechazar", "rechaza" if ok else "acepta", "OK" if ok else "FALLA", "-"])
+    aprobados = sum(1 for f in filas if f[4] == "OK")
+    print("-" * 96)
+    print(f"  RESULTADO: {aprobados}/{len(filas)} casos aprobados")
+    print("=" * 96 + "\n")
+    with open(archivo, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["caso_n", "caso", "esperado_km", "obtenido_km", "resultado", "ruta"])
+        w.writerows(filas)
+    print(f"  ✔ Tabla guardada: {archivo}")
+    return aprobados == len(filas)
 
-    total_google = len(resultados_google)
-    aprobados_google = sum(1 for r in resultados_google if r['valido'])
-    tasa_google = aprobados_google / total_google * 100 if total_google > 0 else 0
 
-    print(f"\n  a) Validación con Google Maps (±5%): {aprobados_google}/{total_google} ({tasa_google:.1f}%)")
-    print(f"  b) Consistencia interna (subestructura óptima): {'✅ Aprobada' if consistencia_ok else '❌ Falló'}")
-    print(f"  c) Análisis de sensibilidad: {len(resultados_sensibilidad)} rutas analizadas")
+# ── 5.3 Validación interna (3.6.1.b) ─────────────────────────────────────────
+def validar_consistencia_interna(G, matrices, caminos, verbose=True):
+    """Subestructura óptima en TODOS los pares: todo subcamino de un camino
+    mínimo debe costar exactamente la distancia mínima entre sus extremos."""
+    nodos = sorted(G.nodes())
+    errores, validaciones = [], 0
+    for crit in CRITERIOS:
+        mat, cam = matrices[crit], caminos[crit]
+        for o in nodos:
+            for d in nodos:
+                if o == d:
+                    continue
+                p = cam[o][d]
+                w = [G[p[i]][p[i + 1]][crit] for i in range(len(p) - 1)]
+                for i in range(len(p) - 1):
+                    for j in range(i + 1, len(p)):
+                        validaciones += 1
+                        if abs(sum(w[i:j]) - mat[p[i]][p[j]]) > TOL:
+                            errores.append((crit, p[i], p[j]))
+    if verbose:
+        print("\n" + "=" * 70)
+        print("  b) CONSISTENCIA INTERNA (subestructura óptima, todos los pares)")
+        print("=" * 70)
+        print(f"  Subcaminos verificados: {validaciones}")
+        if errores:
+            print(f"  ❌ Errores: {len(errores)}")
+            for c, a, b in errores[:5]:
+                print(f"    - [{c}] subcamino {_cod(a)}→{_cod(b)} no es óptimo")
+        else:
+            print("  ✅ Todos los subcaminos son óptimos.")
+        print("=" * 70 + "\n")
+    return len(errores) == 0, validaciones
 
-    if tasa_google >= 95 and consistencia_ok:
-        print("\n  ✅ VALIDACIÓN COMPLETA: El sistema cumple con todos los criterios.")
-    else:
-        print("\n  ⚠️ VALIDACIÓN PARCIAL: Algunos criterios requieren revisión.")
 
-    print("█"*70 + "\n")
+# ── 5.4 Sensibilidad (3.6.1.c) ───────────────────────────────────────────────
+def analisis_sensibilidad(G, matrices, caminos, iteraciones=300,
+                          perturbaciones=(0.10, 0.20), semilla=2026, verbose=True):
+    nodos = sorted(G.nodes())
+    pares = [(u, v) for u in nodos for v in nodos if u < v]
+    difieren = [(u, v) for u, v in pares
+                if caminos["distancia"][u][v] != caminos["tiempo"][u][v]]
+    if verbose:
+        print("\n" + "=" * 70)
+        print("  c) ANÁLISIS DE SENSIBILIDAD")
+        print("=" * 70)
+        print("  (i) ¿Cambia el camino mínimo si se optimiza por TIEMPO en vez de DISTANCIA?")
+        print(f"      {len(difieren)} de {len(pares)} pares ({len(difieren) / len(pares) * 100:.1f}%) tienen un camino distinto.")
+        for u, v in difieren[:5]:
+            print(f"      {_cod(u)}→{_cod(v)}: dist {' → '.join(_cod(x) for x in caminos['distancia'][u][v])}"
+                  f"  |  tiempo {' → '.join(_cod(x) for x in caminos['tiempo'][u][v])}")
+        print("      (costo = distancia × tarifa, produce siempre la misma ruta que distancia)")
 
-    return {
-        'google': resultados_google,
-        'consistencia': consistencia_ok,
-        'sensibilidad': resultados_sensibilidad
-    }
+    base = {}
+    for dia, cfg in DIAS_CONFIG.items():
+        dest = [d for d in cfg["destinos"] if d != BASE]
+        base[dia] = ruta_optima_dia(dest, matrices, "distancia")
 
+    rng = random.Random(semilla)
+    H = G.copy()
+    resultados = {}
+    for p in perturbaciones:
+        estable = {d: 0 for d in DIAS_CONFIG}
+        totales = {d: [] for d in DIAS_CONFIG}
+        regret = {d: [] for d in DIAS_CONFIG}
+        for _ in range(iteraciones):
+            for u, v in H.edges():
+                H[u][v]["distancia"] = G[u][v]["distancia"] * (1 + rng.uniform(-p, p))
+            mat = {"distancia": matriz_un_criterio(H, "distancia")}
+            for dia, cfg in DIAS_CONFIG.items():
+                dest = [d for d in cfg["destinos"] if d != BASE]
+                o, c = ruta_optima_dia(dest, mat, "distancia")
+                bo = base[dia][0]
+                if o == bo or o == bo[::-1]:
+                    estable[dia] += 1
+                sec = [BASE] + bo + [BASE]
+                costo_base = sum(mat["distancia"][a][b] for a, b in zip(sec[:-1], sec[1:]))
+                regret[dia].append((costo_base - c) / c * 100 if c > 0 else 0.0)
+                totales[dia].append(c)
+        resultados[p] = {d: (estable[d] / iteraciones * 100, statistics.mean(regret[d]), max(regret[d]),
+                             min(totales[d]), statistics.mean(totales[d]), max(totales[d]))
+                         for d in DIAS_CONFIG}
+        if verbose:
+            print(f"\n  (ii) Monte Carlo: distancias perturbadas ±{p * 100:.0f}% | {iteraciones} corridas (semilla {semilla})")
+            print(f"      {'Día':<4} {'Mismo orden':>11} {'Sobrecosto medio':>17} {'Sobrecosto máx':>15} {'Dist. base':>11} {'Mín':>7} {'Máx':>7}")
+            for d in DIAS_CONFIG:
+                est, rm, rx, mn, me, mx = resultados[p][d]
+                print(f"      {d:<4} {est:>10.1f}% {rm:>16.2f}% {rx:>14.2f}% {base[d][1]:>11.1f} {mn:>7.1f} {mx:>7.1f}")
+    if verbose:
+        print("\n  Lectura: 'Mismo orden' = % de corridas en que el orden óptimo no cambia.")
+        print("  'Sobrecosto' = % extra de distancia si se mantiene el orden base cuando las distancias")
+        print("  reales difieren. Un orden puede cambiar con frecuencia y aun así costar casi lo mismo")
+        print("  (p. ej. lugares a <1 km entre sí), por eso el sobrecosto es la medida más relevante.")
+        print("=" * 70 + "\n")
+    return {"pares_distintos": len(difieren), "pares_total": len(pares), "montecarlo": resultados}
+
+
+# ── 5.5 Validación externa REAL (3.6.1.a) ────────────────────────────────────
+COLUMNAS_VALIDACION = ["origen", "destino", "distancia_modelo_km", "tiempo_modelo_min",
+                       "distancia_ref_km", "tiempo_ref_min", "fuente", "fecha"]
+
+
+def generar_plantilla_validacion(G, n=20, archivo="validacion_externa_plantilla.csv", semilla=2026):
+    aristas = sorted(tuple(sorted(e)) for e in G.edges())
+    muestra = sorted(random.Random(semilla).sample(aristas, min(n, len(aristas))))
+    with open(archivo, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(COLUMNAS_VALIDACION)
+        for u, v in muestra:
+            w.writerow([_cod(u), _cod(v), G[u][v]["distancia"], G[u][v]["tiempo"], "", "", "", ""])
+    print(f"\n  ✔ Plantilla creada: {archivo} ({len(muestra)} aristas, muestra aleatoria reproducible)")
+    print("    Completa distancia_ref_km, tiempo_ref_min, fuente y fecha con una fuente INDEPENDIENTE")
+    print("    (OSRM, OpenRouteService, o Google Maps medido otro día/hora). Luego usa 'Evaluar'.")
+
+
+def _num(s):
+    s = (s or "").strip().replace(",", ".")
+    return float(s) if s else None
+
+
+def evaluar_validacion_externa(G, archivo="validacion_externa_plantilla.csv",
+                               tol_rel=0.05, tol_abs_km=0.1, tol_abs_min=1.0, umbral=95.0):
+    """Regla: una medida aprueba si |modelo−ref| ≤ max(5% de ref, tolerancia absoluta).
+    La tolerancia absoluta (0.1 km / 1 min) evita fallos injustos en tramos muy cortos."""
+    if not os.path.exists(archivo):
+        print(f"  ✗ No existe '{archivo}'. Genera la plantilla primero.")
+        return None
+    with open(archivo, newline="", encoding="utf-8-sig") as f:
+        texto = f.read()
+    primera = texto.splitlines()[0] if texto else ""
+    delim = ";" if primera.count(";") > primera.count(",") else ","
+    filas = list(csv.DictReader(texto.splitlines(), delimiter=delim))
+    cod2id = {d["cod"]: n for n, d in ATRACTIVOS.items()}
+    res = []
+    print("\n" + "=" * 92)
+    print(f"  a) VALIDACIÓN EXTERNA (tolerancia ±{tol_rel * 100:.0f}% o ±{tol_abs_km} km / ±{tol_abs_min:g} min)")
+    print("=" * 92)
+    print(f"  {'Tramo':<10} {'Dist modelo':>11} {'Dist ref':>9} {'Err %':>7} {'Tiempo mod':>11} {'Tiempo ref':>10} {'Err %':>7} {'Estado':>8}")
+    print("-" * 92)
+    for r in filas:
+        try:
+            dref, tref = _num(r.get("distancia_ref_km")), _num(r.get("tiempo_ref_min"))
+        except ValueError:
+            print(f"  ⚠ Fila {r.get('origen')}-{r.get('destino')}: valor no numérico, se omite.")
+            continue
+        if dref is None or tref is None:
+            continue
+        u, v = cod2id.get((r.get("origen") or "").strip().upper()), cod2id.get((r.get("destino") or "").strip().upper())
+        if u is None or v is None or not G.has_edge(u, v):
+            print(f"  ⚠ Fila {r.get('origen')}-{r.get('destino')}: no corresponde a una arista del grafo, se omite.")
+            continue
+        dm, tm = G[u][v]["distancia"], G[u][v]["tiempo"]
+        ed = (dm - dref) / dref * 100 if dref > 0 else 0.0
+        et = (tm - tref) / tref * 100 if tref > 0 else 0.0
+        ok_d = abs(dm - dref) <= max(tol_rel * dref, tol_abs_km) + 1e-9
+        ok_t = abs(tm - tref) <= max(tol_rel * tref, tol_abs_min) + 1e-9
+        ok = ok_d and ok_t
+        print(f"  {_cod(u)}-{_cod(v):<6} {dm:>11.2f} {dref:>9.2f} {ed:>+7.1f} {tm:>11.0f} {tref:>10.0f} {et:>+7.1f} {'✅' if ok else '❌':>8}")
+        res.append({"tramo": f"{_cod(u)}-{_cod(v)}", "dm": dm, "dref": dref, "ed": ed, "tm": tm, "tref": tref,
+                    "et": et, "ok": ok, "fuente": r.get("fuente", ""), "fecha": r.get("fecha", "")})
+    if not res:
+        print("  ✗ La plantilla no tiene filas completadas (distancia_ref_km y tiempo_ref_min).")
+        print("=" * 92 + "\n")
+        return None
+    apro = sum(1 for r in res if r["ok"])
+    pct = apro / len(res) * 100
+    mape_d = statistics.mean(abs(r["ed"]) for r in res)
+    mape_t = statistics.mean(abs(r["et"]) for r in res)
+    print("-" * 92)
+    print(f"  Aristas evaluadas: {len(res)} | Aprobadas: {apro} ({pct:.1f}%)")
+    print(f"  Error porcentual absoluto medio (MAPE): distancia {mape_d:.2f}% | tiempo {mape_t:.2f}%")
+    print(f"  Error máximo: distancia {max(abs(r['ed']) for r in res):.1f}% | tiempo {max(abs(r['et']) for r in res):.1f}%")
+    print(f"  {'✅ CUMPLE' if pct >= umbral else '❌ NO CUMPLE'} el umbral de {umbral:.0f}% de aprobación")
+    print("=" * 92 + "\n")
+    salida = "validacion_externa_resultados.csv"
+    with open(salida, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["tramo", "dist_modelo", "dist_ref", "error_dist_%", "tiempo_modelo", "tiempo_ref",
+                    "error_tiempo_%", "aprobado", "fuente", "fecha"])
+        for r in res:
+            w.writerow([r["tramo"], r["dm"], r["dref"], round(r["ed"], 2), r["tm"], r["tref"],
+                        round(r["et"], 2), "SI" if r["ok"] else "NO", r["fuente"], r["fecha"]])
+    print(f"  ✔ Resultados guardados: {salida}")
+    return res
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 6. PRUEBAS DE TIEMPO DE EJECUCIÓN (Sección 3.6.3.c)
+# 6. PRUEBAS DE TIEMPO DE EJECUCIÓN (Tabla 9 – 3.6.3.c)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def probar_tiempo_ejecucion(G, iteraciones=10):
-    """
-    Prueba de tiempo de ejecución para diferentes tamaños de grafo (Tabla 9).
-    El tamaño real del grafo del proyecto es (29 nodos, 53 aristas).
-    Se mide tanto sobre grafos aleatorios del mismo tamaño como sobre el
-    grafo real G.
-    """
-    print("\n" + "="*70)
-    print("  PRUEBA DE TIEMPO DE EJECUCIÓN (Tabla 9 - Sección 3.6.3.c)")
-    print("="*70)
-
-    n_reales = G.number_of_nodes()
-    m_reales = G.number_of_edges()
-
-    tamanos = [
-        (5, 7),
-        (10, 15),
-        (21, 32),
-        (n_reales, m_reales),
-        (50, 120)
-    ]
-
-    resultados = []
-
+def probar_tiempo_ejecucion(G, iteraciones=10, semilla=123):
+    """Tiempo de calcular Dijkstra desde TODOS los nodos (todos los pares)."""
+    rng = random.Random(semilla)
+    n_r, m_r = G.number_of_nodes(), G.number_of_edges()
+    tamanos = [(5, 7), (10, 15), (21, 32), (n_r, m_r), (50, 120), (100, 300), (200, 600)]
+    filas = []
     for nodos, aristas in tamanos:
         tiempos = []
         for _ in range(iteraciones):
-            G_test = nx.gnm_random_graph(nodos, aristas)
-            for u, v in G_test.edges():
-                G_test[u][v]['distancia'] = random.uniform(1, 50)
-            start = time.time()
-            for origen in range(nodos):
-                dijkstra(G_test, origen, 'distancia')
-            end = time.time()
-            tiempos.append(end - start)
-
-        tiempo_promedio = sum(tiempos) / len(tiempos)
-        resultados.append({'nodos': nodos, 'aristas': aristas, 'tiempo_promedio': tiempo_promedio})
-        print(f"  {nodos:>2} nodos, {aristas:>3} aristas: {tiempo_promedio:.4f} s (promedio de {iteraciones} ejecuciones, grafo aleatorio)")
-
-    # Medición directa sobre el grafo REAL del proyecto
-    tiempos_reales = []
+            Gt = nx.gnm_random_graph(nodos, aristas, seed=rng.randint(0, 10 ** 9))
+            for u, v in Gt.edges():
+                Gt[u][v]["distancia"] = rng.uniform(1, 50)
+            t0 = time.perf_counter()
+            for o in Gt.nodes():
+                dijkstra(Gt, o, "distancia")
+            tiempos.append(time.perf_counter() - t0)
+        filas.append((nodos, aristas, statistics.mean(tiempos), statistics.stdev(tiempos), min(tiempos), "aleatorio"))
+    tiempos = []
     for _ in range(iteraciones):
-        start = time.time()
-        for origen in G.nodes():
-            dijkstra(G, origen, 'distancia')
-        end = time.time()
-        tiempos_reales.append(end - start)
-    tiempo_promedio_real = sum(tiempos_reales) / len(tiempos_reales)
-    print(f"  {n_reales:>2} nodos, {m_reales:>3} aristas: {tiempo_promedio_real:.4f} s (promedio de {iteraciones} ejecuciones, GRAFO REAL DEL PROYECTO)")
+        t0 = time.perf_counter()
+        for o in G.nodes():
+            dijkstra(G, o, "distancia")
+        tiempos.append(time.perf_counter() - t0)
+    filas.append((n_r, m_r, statistics.mean(tiempos), statistics.stdev(tiempos), min(tiempos), "REAL"))
+    filas.sort(key=lambda f: (f[0], f[5] != "aleatorio"))
 
-    print("\n" + "-"*50)
-    print("  TABLA 9: TIEMPOS DE EJECUCIÓN DEL ALGORITMO")
-    print("-"*50)
-    print(f"  {'Nodos':<10} {'Aristas':<10} {'Tiempo (s)':<15}")
-    print("-"*50)
-    for r in resultados:
-        print(f"  {r['nodos']:<10} {r['aristas']:<10} {r['tiempo_promedio']:<15.4f}")
-    print(f"  {n_reales:<10} {m_reales:<10} {tiempo_promedio_real:<15.4f}  ⭐ GRAFO REAL DEL PROYECTO")
-    print("-"*50)
-    print("="*70 + "\n")
-    return resultados
+    print("\n" + "=" * 78)
+    print("  PRUEBA DE TIEMPO DE EJECUCIÓN – TABLA 9 (3.6.3.c)")
+    print(f"  Dijkstra desde todos los nodos | {iteraciones} repeticiones | semilla {semilla}")
+    print("=" * 78)
+    print(f"  {'Nodos':<8} {'Aristas':<9} {'Media (s)':>11} {'Desv. est.':>11} {'Mínimo (s)':>11}  Grafo")
+    print("-" * 78)
+    for n, m, me, sd, mn, tipo in filas:
+        marca = "  ⭐ PROYECTO" if tipo == "REAL" else ""
+        print(f"  {n:<8} {m:<9} {me:>11.5f} {sd:>11.5f} {mn:>11.5f}  {tipo}{marca}")
+    print("=" * 78 + "\n")
+    return filas
 
 
 def probar_tiempo_ruta_dia(matrices, criterio="distancia"):
-    """
-    Prueba de tiempo para calcular las rutas de los 7 días
-    """
-    print("\n" + "="*70)
-    print("  PRUEBA DE TIEMPO - RUTAS DE 7 DÍAS")
-    print("="*70)
-
+    print("\n" + "=" * 70)
+    print("  PRUEBA DE TIEMPO - ORDEN ÓPTIMO DE LOS 7 DÍAS (TSP por permutaciones)")
+    print("=" * 70)
     tiempos = []
     for dia in range(1, 8):
-        destinos = [d for d in DIAS_CONFIG[dia]["destinos"] if d != 15]
-        start = time.time()
-        orden, costo = ruta_optima_dia(destinos, matrices, criterio)
-        end = time.time()
-        tiempos.append(end - start)
-        print(f"  Día {dia}: {end - start:.6f} s")
-
-    print("-"*50)
-    print(f"  ⏱️ Tiempo promedio por día: {sum(tiempos)/len(tiempos):.6f} s")
-    print(f"  ⏱️ Tiempo total 7 días: {sum(tiempos):.6f} s")
-    print("="*70 + "\n")
+        destinos = [d for d in DIAS_CONFIG[dia]["destinos"] if d != BASE]
+        t0 = time.perf_counter()
+        ruta_optima_dia(destinos, matrices, criterio)
+        dt = time.perf_counter() - t0
+        tiempos.append(dt)
+        print(f"  Día {dia} ({len(destinos)} destinos): {dt:.6f} s")
+    print("-" * 50)
+    print(f"  Promedio por día: {sum(tiempos) / len(tiempos):.6f} s | Total 7 días: {sum(tiempos):.6f} s")
+    print("=" * 70 + "\n")
     return tiempos
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. EXPORTACIÓN A EXCEL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def exportar_excel(G, matrices, nombre="Rutas_Cocle.xlsx"):
+    wb = Workbook()
+    wb.remove(wb.active)
+    AZUL, GRIS, BLANCO = "1F4E79", "F2F2F2", "FFFFFF"
+
+    def celda(ws, fila, col, valor, bold=False, bg=None, alinear="center", fmt=None):
+        c = ws.cell(row=fila, column=col, value=valor)
+        c.font = Font(name="Arial", bold=bold, size=10)
+        if bg:
+            c.fill = PatternFill("solid", fgColor=bg)
+        c.alignment = Alignment(horizontal=alinear, vertical="center", wrap_text=True)
+        if fmt:
+            c.number_format = fmt
+        return c
+
+    def titulo_hoja(ws, texto, ncols):
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+        c = ws.cell(row=1, column=1, value=texto)
+        c.font = Font(name="Arial", bold=True, color=BLANCO, size=14)
+        c.fill = PatternFill("solid", fgColor=AZUL)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 30
+
+    # Hoja 1: rutas
+    ws = wb.create_sheet("Rutas_7_Dias")
+    titulo_hoja(ws, "RUTAS TURÍSTICAS - PROVINCIA DE COCLÉ (criterio oficial: distancia)", 8)
+    for j, h in enumerate(["Día", "Zona", "Ruta óptima (ida y vuelta)", "Distancia (km)", "Tiempo (min)",
+                           "Costo (USD)", "Nivel", "Frase"], 1):
+        celda(ws, 2, j, h, bold=True, bg=GRIS)
+    for dia, cfg in DIAS_CONFIG.items():
+        i = dia + 2
+        bg = BLANCO if i % 2 == 0 else GRIS
+        celda(ws, i, 1, dia, bg=bg)
+        celda(ws, i, 2, cfg["zona"], bg=bg)
+        celda(ws, i, 3, texto_ruta_dia(cfg), bg=bg)
+        celda(ws, i, 4, cfg["distancia_km"], bg=bg, fmt="0.0")
+        celda(ws, i, 5, cfg["tiempo_auto_min"], bg=bg, fmt="0")
+        celda(ws, i, 6, cfg["costo_usd"], bg=bg, fmt="0.00")
+        celda(ws, i, 7, cfg["nivel"], bg=bg)
+        celda(ws, i, 8, cfg["frase"], bg=bg, alinear="left")
+    for j, ancho in enumerate([6, 30, 42, 14, 12, 12, 10, 48], 1):
+        ws.column_dimensions[get_column_letter(j)].width = ancho
+
+    # Hoja 2: aristas (anexo de datos)
+    ws2 = wb.create_sheet("Aristas")
+    titulo_hoja(ws2, f"ARISTAS DEL GRAFO ({G.number_of_edges()})", 7)
+    for j, h in enumerate(["Origen", "Destino", "Nombre origen", "Nombre destino", "Distancia (km)",
+                           "Tiempo (min)", "Costo (USD)"], 1):
+        celda(ws2, 2, j, h, bold=True, bg=GRIS)
+    for k, (u, v, d) in enumerate(sorted(G.edges(data=True), key=lambda e: (min(e[0], e[1]), max(e[0], e[1]))), 3):
+        bg = BLANCO if k % 2 == 1 else GRIS
+        celda(ws2, k, 1, _cod(u), bg=bg)
+        celda(ws2, k, 2, _cod(v), bg=bg)
+        celda(ws2, k, 3, ATRACTIVOS[u]["nombre"], bg=bg, alinear="left")
+        celda(ws2, k, 4, ATRACTIVOS[v]["nombre"], bg=bg, alinear="left")
+        celda(ws2, k, 5, d["distancia"], bg=bg, fmt="0.00")
+        celda(ws2, k, 6, d["tiempo"], bg=bg, fmt="0")
+        celda(ws2, k, 7, round(d["costo"], 4), bg=bg, fmt="0.00")
+    for j, ancho in enumerate([9, 9, 34, 34, 15, 13, 13], 1):
+        ws2.column_dimensions[get_column_letter(j)].width = ancho
+
+    # Hoja 3: matriz de distancias mínimas
+    ws3 = wb.create_sheet("Matriz_Distancia")
+    nodos = sorted(G.nodes())
+    titulo_hoja(ws3, "MATRIZ DE DISTANCIAS MÍNIMAS (km) – Dijkstra", len(nodos) + 1)
+    celda(ws3, 2, 1, "", bold=True, bg=GRIS)
+    for j, n in enumerate(nodos, 2):
+        celda(ws3, 2, j, _cod(n), bold=True, bg=GRIS)
+    for i, o in enumerate(nodos, 3):
+        celda(ws3, i, 1, _cod(o), bold=True, bg=GRIS)
+        for j, d in enumerate(nodos, 2):
+            celda(ws3, i, j, matrices["distancia"][o][d], fmt="0.0")
+    for j in range(1, len(nodos) + 2):
+        ws3.column_dimensions[get_column_letter(j)].width = 7
+
+    wb.save(nombre)
+    print(f"\n  ✔ Excel exportado: {nombre}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 7. FUNCIONES DE CONSOLA Y MENÚ
+# 8. CONSOLA Y MENÚS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def limpiar():
     os.system("cls" if os.name == "nt" else "clear")
 
+
 def separador(char="─", ancho=64, color="\033[96m"):
     print(f"{color}{char * ancho}\033[0m")
+
 
 def titulo(texto):
     limpiar()
     separador("═")
     print(f"\033[1;36m  {texto}\033[0m")
     separador("═")
+
 
 def elegir_criterio():
     print("\n  Elige el criterio de optimización:")
@@ -1066,10 +1246,14 @@ def elegir_criterio():
     print("   [3] Costo mínimo (USD)")
     while True:
         op = input("\n  Opción: ").strip()
-        if op == "1": return "distancia"
-        if op == "2": return "tiempo"
-        if op == "3": return "costo"
+        if op == "1":
+            return "distancia"
+        if op == "2":
+            return "tiempo"
+        if op == "3":
+            return "costo"
         print("  ✗ Opción inválida.")
+
 
 def mostrar_tabla_nodos(G):
     separador()
@@ -1079,39 +1263,42 @@ def mostrar_tabla_nodos(G):
         print(f"  {nid:<4} {data['cod']:<5} {data['nombre']:<34} {data['tipo']:<18} {data['distrito']:<12}")
     separador()
 
-def mostrar_resultado_ruta(G, secuencia, matrices, criterio):
+
+def mostrar_resultado_ruta(G, secuencia, matrices):
     mat_d, mat_t, mat_c = matrices["distancia"], matrices["tiempo"], matrices["costo"]
     separador()
     print(f"  \033[1m{'Tramo':<22} {'Distancia':>10} {'Tiempo':>10} {'Costo':>10}\033[0m")
     separador()
     tot_d = tot_t = tot_c = 0
     for i in range(len(secuencia) - 1):
-        u, v = secuencia[i], secuencia[i+1]
+        u, v = secuencia[i], secuencia[i + 1]
         d, t, c = mat_d[u][v] or 0, mat_t[u][v] or 0, mat_c[u][v] or 0
-        tot_d += d; tot_t += t; tot_c += c
-        print(f"  {G.nodes[u]['cod']} → {G.nodes[v]['cod']:<16} {d:>9.1f}km {t:>9.1f}min {c:>9.2f}$")
+        tot_d += d
+        tot_t += t
+        tot_c += c
+        print(f"  {_cod(u)} → {_cod(v):<16} {d:>9.1f}km {t:>9.1f}min {c:>9.2f}$")
     separador()
     print(f"  \033[1m{'TOTAL':<22} {tot_d:>9.1f}km {tot_t:>9.1f}min {tot_c:>9.2f}$\033[0m")
     separador()
 
+
 def mostrar_todas_rutas():
-    titulo("🗺️ RUTAS DE 7 DÍAS")
+    titulo("🗺️ RUTAS DE 7 DÍAS (criterio oficial: distancia, ida y vuelta a Penonomé)")
     for dia in range(1, 8):
         cfg = DIAS_CONFIG[dia]
-        cods = " → ".join(ATRACTIVOS[n]["cod"] for n in cfg["destinos"])
         print(f"\n  📅 DÍA {dia}: {cfg['zona']}")
-        print(f"  📍 {cods}")
+        print(f"  📍 {texto_ruta_dia(cfg)}")
         print(f"  📏 {cfg['distancia_km']:.1f} km | ⏱️ {cfg['tiempo_auto_min']} min | 💰 ${cfg['costo_usd']:.2f}")
         print(f"  💬 '{cfg['frase']}'")
-        print("-"*50)
+        print("-" * 50)
+
 
 def submenu_dia(G, matrices, caminos):
     titulo("RUTA ÓPTIMA POR DÍA")
     print("\n  Días disponibles:\n")
     for d, cfg in DIAS_CONFIG.items():
-        cods = " → ".join(ATRACTIVOS[n]["cod"] for n in cfg["destinos"])
         print(f"   \033[1m[{d}]\033[0m  {cfg['zona']}")
-        print(f"         Destinos: {cods}")
+        print(f"         Destinos: {' → '.join(_cod(n) for n in cfg['destinos'])}")
     print()
     while True:
         entrada = input("  ¿Qué día quieres ver? (1-7): ").strip()
@@ -1121,20 +1308,19 @@ def submenu_dia(G, matrices, caminos):
         print("  ✗ Ingresa un número del 1 al 7.")
     criterio = elegir_criterio()
     cfg = DIAS_CONFIG[dia]
-    destinos = [d for d in cfg["destinos"] if d != 15]
+    destinos = [d for d in cfg["destinos"] if d != BASE]
     orden, costo = ruta_optima_dia(destinos, matrices, criterio)
     if orden is None:
         print("  ✗ No se pudo calcular la ruta.")
         return
-    secuencia = [15] + orden + [15]
+    secuencia = [BASE] + orden + [BASE]
     titulo(f"DÍA {dia} — {cfg['zona']}")
     print(f"\n  📝 {cfg['descripcion']}")
     print(f"  💬 '{cfg['frase']}'")
     print(f"\n  Criterio: {criterio.upper()} | Total: {costo:.1f}")
-    print(f"\n  Orden óptimo de visita:")
-    ruta_str = " → ".join(G.nodes[n]["cod"] for n in secuencia)
-    print(f"  \033[1;32m{ruta_str}\033[0m\n")
-    mostrar_resultado_ruta(G, secuencia, matrices, criterio)
+    print("\n  Orden óptimo de visita:")
+    print(f"  \033[1;32m{' → '.join(_cod(n) for n in secuencia)}\033[0m\n")
+    mostrar_resultado_ruta(G, secuencia, matrices)
     print("\n  \033[1m[1]\033[0m  Ver grafo de este día")
     print("  \033[1m[2]\033[0m  Guardar grafo como PNG")
     print("  \033[1m[3]\033[0m  Volver al menú")
@@ -1144,6 +1330,7 @@ def submenu_dia(G, matrices, caminos):
     elif sub == "2":
         dibujar_grafo_dia(G, dia, matrices, caminos, criterio, guardar=f"Grafo_Dia_{dia}_{criterio}.png")
 
+
 def submenu_camino(G, matrices, caminos):
     titulo("CAMINO MÍNIMO ENTRE DOS NODOS")
     mostrar_tabla_nodos(G)
@@ -1152,57 +1339,64 @@ def submenu_camino(G, matrices, caminos):
         try:
             u = int(input("  ID del nodo ORIGEN (1-29): ").strip())
             v = int(input("  ID del nodo DESTINO (1-29): ").strip())
-            if u in ATRACTIVOS and v in ATRACTIVOS and u != v:
-                break
-            print("  ✗ IDs inválidos o iguales.")
         except ValueError:
             print("  ✗ Ingresa un número válido.")
+            continue
+        if es_id_valido(u) and es_id_valido(v) and u != v:
+            break
+        print("  ✗ IDs inválidos o iguales.")
     criterio = elegir_criterio()
     camino = caminos[criterio][u][v]
     valor = matrices[criterio][u][v]
     if not camino:
         print(f"\n  ✗ No existe camino entre {u} y {v}.")
         return
-    titulo(f"CAMINO MÍNIMO: {ATRACTIVOS[u]['cod']} → {ATRACTIVOS[v]['cod']}")
+    titulo(f"CAMINO MÍNIMO: {_cod(u)} → {_cod(v)}")
     print(f"\n  Criterio: {criterio.upper()} | Total: {valor:.2f}")
-    print(f"  Ruta: {' → '.join(G.nodes[n]['cod'] for n in camino)}\n")
+    print(f"  Ruta: {' → '.join(_cod(n) for n in camino)}\n")
 
-def exportar_excel(G, matrices, nombre="Rutas_Cocle.xlsx"):
-    wb = Workbook()
-    wb.remove(wb.active)
-    AZUL, GRIS, BLANC = "1F4E79", "F2F2F2", "FFFFFF"
-    def celda(ws, fila, col, valor, bold=False, bg=None, alinear="center"):
-        c = ws.cell(row=fila, column=col, value=valor)
-        c.font = Font(name="Arial", bold=bold, size=10)
-        if bg:
-            c.fill = PatternFill("solid", fgColor=bg)
-        c.alignment = Alignment(horizontal=alinear, vertical="center")
-        return c
-    ws = wb.create_sheet("Rutas_7_Dias")
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
-    c = ws.cell(row=1, column=1, value="RUTAS TURÍSTICAS - PROVINCIA DE COCLÉ")
-    c.font = Font(name="Arial", bold=True, color=BLANC, size=14)
-    c.fill = PatternFill("solid", fgColor=AZUL)
-    c.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[1].height = 30
-    hdrs = ["Día", "Zona", "Lugares", "Distancia", "Tiempo", "Costo", "Nivel", "Frase"]
-    for j, h in enumerate(hdrs, 1):
-        celda(ws, 2, j, h, bold=True, bg=GRIS)
-    for dia, cfg in DIAS_CONFIG.items():
-        i = dia + 2
-        cods = " → ".join(ATRACTIVOS[n]["cod"] for n in cfg["destinos"])
-        celda(ws, i, 1, dia, bg=BLANC if i%2==0 else GRIS)
-        celda(ws, i, 2, cfg["zona"], bg=BLANC if i%2==0 else GRIS)
-        celda(ws, i, 3, cods, bg=BLANC if i%2==0 else GRIS)
-        celda(ws, i, 4, f"{cfg['distancia_km']:.1f} km", bg=BLANC if i%2==0 else GRIS)
-        celda(ws, i, 5, f"{cfg['tiempo_auto_min']} min", bg=BLANC if i%2==0 else GRIS)
-        celda(ws, i, 6, f"${cfg['costo_usd']:.2f}", bg=BLANC if i%2==0 else GRIS)
-        celda(ws, i, 7, cfg["nivel"], bg=BLANC if i%2==0 else GRIS)
-        celda(ws, i, 8, cfg["frase"], bg=BLANC if i%2==0 else GRIS, alinear="left")
-    for j in range(1, 9):
-        ws.column_dimensions[get_column_letter(j)].width = 22
-    wb.save(nombre)
-    print(f"\n  ✔ Excel exportado: {nombre}")
+
+def submenu_validaciones(G, matrices, caminos):
+    titulo("VALIDACIONES (Sección 3.6.1)")
+    print("""
+  [1]  a) Generar plantilla CSV para validación externa
+  [2]  a) Evaluar plantilla CSV ya completada
+  [3]  b) Consistencia interna (subestructura óptima)
+  [4]  c) Análisis de sensibilidad (distancia vs tiempo + Monte Carlo)
+  [5]  Volver
+""")
+    op = input("  Opción: ").strip()
+    if op == "1":
+        generar_plantilla_validacion(G)
+    elif op == "2":
+        ruta = input("  Archivo CSV (Enter = validacion_externa_plantilla.csv): ").strip()
+        evaluar_validacion_externa(G, ruta or "validacion_externa_plantilla.csv")
+    elif op == "3":
+        validar_consistencia_interna(G, matrices, caminos)
+    elif op == "4":
+        print("\n  ⏳ Ejecutando (unos segundos)...")
+        analisis_sensibilidad(G, matrices, caminos)
+
+
+def submenu_pruebas(G, matrices, caminos):
+    titulo("PRUEBAS COMPUTACIONALES (Sección 3.6.3)")
+    print("""
+  [1]  b) Integridad de datos (automática)
+  [2]  a) Caja negra automática + verificación contra networkx/Floyd-Warshall
+  [3]  c) Tiempos de ejecución (Tabla 9)
+  [4]  Volver
+""")
+    op = input("  Opción: ").strip()
+    if op == "1":
+        prueba_integridad_datos(G)
+    elif op == "2":
+        tabla_casos_caja_negra(G, matrices, caminos)
+        verificacion_algoritmo(G, matrices, caminos)
+    elif op == "3":
+        print("\n  ⏳ Ejecutando pruebas...")
+        probar_tiempo_ejecucion(G)
+        probar_tiempo_ruta_dia(matrices)
+
 
 def menu_principal():
     print("""
@@ -1216,90 +1410,114 @@ def menu_principal():
   \033[1m[2]\033[0m  Ver grafo completo (nodos y aristas)
   \033[1m[3]\033[0m  Ver ruta óptima de un día (1–7)
   \033[1m[4]\033[0m  Ver todas las rutas de los 7 días
-  \033[1m[5]\033[0m  Calcular camino mínimo entre dos nodos
+  \033[1m[5]\033[0m  Camino mínimo entre dos nodos (caja negra manual)
   \033[1m[6]\033[0m  Exportar todo a Excel
   \033[1m[7]\033[0m  Guardar grafos como imágenes PNG
-  \033[1m[8]\033[0m  Ejecutar validaciones (Sección 3.6.1)
-  \033[1m[9]\033[0m  Ejecutar pruebas de tiempo de ejecución (Tabla 9)
+  \033[1m[8]\033[0m  Validaciones (Sección 3.6.1)
+  \033[1m[9]\033[0m  Pruebas computacionales (Sección 3.6.3)
   \033[1m[0]\033[0m  Salir
 """)
+
+
+def inicializar():
+    G = construir_grafo()
+    matrices, caminos = calcular_todas_matrices(G)
+    recalcular_estadisticas_dias(matrices, criterio="distancia")
+    return G, matrices, caminos
+
+
+def ejecutar_todo_sin_menu():
+    """python rutas_cocle_dijkstra.py --pruebas : genera todos los resultados."""
+    G, matrices, caminos = inicializar()
+    print(f"\n  Grafo: {G.number_of_nodes()} nodos · {G.number_of_edges()} aristas")
+    mostrar_todas_rutas_sin_limpiar()
+    prueba_integridad_datos(G)
+    ok_alg, _ = verificacion_algoritmo(G, matrices, caminos)
+    ok_cn = tabla_casos_caja_negra(G, matrices, caminos)
+    ok_ci, _ = validar_consistencia_interna(G, matrices, caminos)
+    analisis_sensibilidad(G, matrices, caminos)
+    probar_tiempo_ejecucion(G)
+    probar_tiempo_ruta_dia(matrices)
+    exportar_excel(G, matrices)
+    generar_plantilla_validacion(G)
+    print("\n  RESUMEN: verificación algoritmo:", "OK" if ok_alg else "FALLA",
+          "| caja negra:", "OK" if ok_cn else "FALLA",
+          "| consistencia interna:", "OK" if ok_ci else "FALLA")
+
+
+def mostrar_todas_rutas_sin_limpiar():
+    print("\n  RUTAS DE 7 DÍAS (criterio oficial: distancia, ida y vuelta a Penonomé)")
+    for dia in range(1, 8):
+        cfg = DIAS_CONFIG[dia]
+        print(f"  Día {dia}: {texto_ruta_dia(cfg)} | {cfg['distancia_km']:.1f} km | "
+              f"{cfg['tiempo_auto_min']} min | ${cfg['costo_usd']:.2f}")
+
 
 def main():
     limpiar()
     print("\n  \033[1;36mInicializando sistema...\033[0m")
-    G = construir_grafo()
+    G, matrices, caminos = inicializar()
     print(f"  ✔ Grafo construido: {G.number_of_nodes()} nodos · {G.number_of_edges()} aristas")
-    print(f"  ✔ Prueba de integridad de datos: {G.number_of_nodes()} nodos, {G.number_of_edges()} aristas con valores positivos")
-    matrices, caminos = calcular_todas_matrices(G)
     print("  ✔ Matrices calculadas para los 3 criterios.")
-    recalcular_estadisticas_dias(matrices, criterio="distancia")
-    print("  ✔ Estadísticas de los 7 días recalculadas en vivo (criterio oficial: distancia).")
+    print("  ✔ Estadísticas de los 7 días recalculadas (criterio oficial: distancia).")
+    errores, advertencias = prueba_integridad_datos(G, verbose=False)
+    if errores:
+        print(f"  ❌ Integridad de datos: {len(errores)} ERRORES (ver menú 9 → 1)")
+    else:
+        print(f"  ✔ Integridad de datos: sin errores | {len(advertencias)} advertencias (ver menú 9 → 1)")
     input("\n  Presiona Enter para continuar...")
 
-    while True:
-        limpiar()
-        menu_principal()
-        opcion = input("  Opción: ").strip()
-        if opcion == "0":
+    try:
+        while True:
             limpiar()
-            print("\n  ¡Hasta luego!\n")
-            break
-        elif opcion == "1":
-            titulo("INVENTARIO DE ATRACTIVOS")
-            mostrar_tabla_nodos(G)
-            input("\n  Presiona Enter...")
-        elif opcion == "2":
-            titulo("GRAFO COMPLETO")
-            criterio = elegir_criterio()
-            dibujar_grafo_completo(G, criterio)
-        elif opcion == "3":
-            submenu_dia(G, matrices, caminos)
-            input("\n  Presiona Enter...")
-        elif opcion == "4":
-            mostrar_todas_rutas()
-            input("\n  Presiona Enter...")
-        elif opcion == "5":
-            # Prueba de Caja Negra (sección 3.6.3.a) - manual
-            print("\n  ℹ️ Prueba de Caja Negra (3.6.3.a):")
-            print("     Esta opción permite verificar manualmente que el algoritmo")
-            print("     encuentra el camino más corto entre dos nodos.")
-            submenu_camino(G, matrices, caminos)
-            input("\n  Presiona Enter...")
-        elif opcion == "6":
-            titulo("EXPORTAR A EXCEL")
-            exportar_excel(G, matrices)
-            input("\n  Presiona Enter...")
-        elif opcion == "7":
-            titulo("GUARDAR GRAFOS")
-            criterio = elegir_criterio()
-            os.makedirs("grafos_cocle", exist_ok=True)
-            dibujar_grafo_completo(G, criterio, guardar=f"grafos_cocle/grafo_completo_{criterio}.png")
-            for dia in range(1, 8):
-                dibujar_grafo_dia(G, dia, matrices, caminos, criterio, guardar=f"grafos_cocle/dia_{dia}_{criterio}.png")
-            print(f"\n  ✔ Grafos guardados en 'grafos_cocle/'")
-            input("\n  Presiona Enter...")
-        elif opcion == "8":
-            titulo("VALIDACIONES (Sección 3.6.1)")
-            print("\n  Esta sección ejecuta las tres validaciones del marco metodológico:")
-            print("  a) Comparación con Google Maps (SIMULADA, ±5%)")
-            print("  b) Consistencia interna (subestructura óptima)")
-            print("  c) Análisis de sensibilidad (3 criterios; distancia = oficial)")
-            print("\n  NOTA: La validación con Google Maps es SIMULADA con variación de ±4%")
-            input("\n  Presiona Enter para ejecutar las validaciones...")
-            ejecutar_validaciones_completas(G, matrices, caminos)
-            input("\n  Presiona Enter para continuar...")
-        elif opcion == "9":
-            titulo("PRUEBAS DE TIEMPO DE EJECUCIÓN (Tabla 9)")
-            print("\n  Esta prueba mide el tiempo de ejecución del algoritmo de Dijkstra")
-            print("  para diferentes tamaños de grafo, incluyendo el grafo real del proyecto.")
-            print("  Corresponde a la sección 3.6.3.c de la metodología.\n")
-            print("  ⏳ Ejecutando pruebas...\n")
-            probar_tiempo_ejecucion(G)
-            probar_tiempo_ruta_dia(matrices)
-            input("\n  Presiona Enter para continuar...")
-        else:
-            print("  ✗ Opción no válida.")
-            input("\n  Presiona Enter...")
+            menu_principal()
+            opcion = input("  Opción: ").strip()
+            if opcion == "0":
+                limpiar()
+                print("\n  ¡Hasta luego!\n")
+                break
+            elif opcion == "1":
+                titulo("INVENTARIO DE ATRACTIVOS")
+                mostrar_tabla_nodos(G)
+            elif opcion == "2":
+                titulo("GRAFO COMPLETO")
+                dibujar_grafo_completo(G, elegir_criterio())
+            elif opcion == "3":
+                submenu_dia(G, matrices, caminos)
+            elif opcion == "4":
+                mostrar_todas_rutas()
+            elif opcion == "5":
+                print("\n  ℹ️ Prueba de Caja Negra manual (3.6.3.a): verifica a mano el camino mínimo.")
+                submenu_camino(G, matrices, caminos)
+            elif opcion == "6":
+                titulo("EXPORTAR A EXCEL")
+                try:
+                    exportar_excel(G, matrices)
+                except PermissionError:
+                    print("\n  ✗ No se pudo escribir 'Rutas_Cocle.xlsx'. Ciérralo en Excel e inténtalo de nuevo.")
+            elif opcion == "7":
+                titulo("GUARDAR GRAFOS")
+                criterio = elegir_criterio()
+                os.makedirs("grafos_cocle", exist_ok=True)
+                dibujar_grafo_completo(G, criterio, guardar=f"grafos_cocle/grafo_completo_{criterio}.png")
+                for dia in range(1, 8):
+                    dibujar_grafo_dia(G, dia, matrices, caminos, criterio,
+                                      guardar=f"grafos_cocle/dia_{dia}_{criterio}.png")
+                print("\n  ✔ Grafos guardados en 'grafos_cocle/'")
+            elif opcion == "8":
+                submenu_validaciones(G, matrices, caminos)
+            elif opcion == "9":
+                submenu_pruebas(G, matrices, caminos)
+            else:
+                print("  ✗ Opción no válida.")
+            if opcion != "0":
+                input("\n  Presiona Enter...")
+    except (KeyboardInterrupt, EOFError):
+        print("\n\n  Programa terminado.\n")
+
 
 if __name__ == "__main__":
-    main()
+    if "--pruebas" in sys.argv:
+        ejecutar_todo_sin_menu()
+    else:
+        main()
