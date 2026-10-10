@@ -4,8 +4,8 @@
 
 <p align="center">
   <strong>Universidad de Panamá</strong><br>
-  Facultad de Informática<br>
-  Proyecto académico de optimización de rutas turísticas
+  Facultad de Ciencias Naturales y Exactas <br>
+  Licenciatura en Matemáticas Proyecto académico de optimización de rutas turísticas
 </p>
 
 <p align="center">
