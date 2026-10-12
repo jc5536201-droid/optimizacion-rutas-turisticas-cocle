@@ -1,7 +1,8 @@
 """
 OPTIMIZACIÓN DE RUTAS TURÍSTICAS – PROVINCIA DE COCLÉ, PANAMÁ
-Algoritmo de Dijkstra | 29 nodos | 53 aristas | Menú interactivo
-Universidad de Panamá – Facultad de Ciencias Naturales y Exactas Licenciatura en Matemáticas
+Algoritmo de Dijkstra | 29 nodos | 57 aristas | Menú interactivo
+Universidad de Panamá – Facultad de Ciencias Naturales y Exactas
+Licenciatura en Matemáticas
 
 7 DÍAS · 4-6 LUGARES POR DÍA · DATOS ESTIMADOS DESDE GOOGLE MAPS
 CRITERIO OFICIAL DEL PROYECTO: DISTANCIA (según indicación del asesor)
@@ -26,7 +27,7 @@ VALIDACIONES (Sección 3.6.1)
 PRUEBAS COMPUTACIONALES (Sección 3.6.3)
   a) Caja negra: manual (opción 5) y automática con tabla de casos (opción 9-2)
   b) Integridad de datos: automática y real (opción 9-1)
-  c) Tiempo de ejecución (Tabla 9) (opción 9-3)
+  c) Tiempo de ejecución (Tabla 11) (opción 9-3)
 
 MODO SIN MENÚ (genera todas las tablas de una vez):
      python rutas_cocle_dijkstra.py --pruebas
@@ -161,7 +162,19 @@ ATRACTIVOS = {
 # integridad verifica que ninguna distancia por carretera sea menor que la
 # distancia en línea recta. Ejemplo:  15: (8.5190, -80.3570),8
 # NO inventes valores: cópialos de tu capa GIS o de Google Maps.
-COORDENADAS = {}
+COORDENADAS = {
+    1: (8.37388, -80.10569),   2: (8.36130, -80.12977),   3: (8.20159, -80.48353),
+    4: (8.34595, -80.15175),   5: (8.29827, -80.25338),   6: (8.60408, -80.13115),
+    7: (8.60162, -80.11503),   8: (8.52497, -80.35677),   9: (8.69558, -80.60450),
+    10: (8.40012, -80.50146), 11: (8.24104, -80.53980), 12: (8.52188, -80.35936),
+    13: (8.64588, -80.58997), 14: (8.52654, -80.35536), 15: (8.55029, -80.35474),
+    16: (8.23017, -80.55495), 17: (8.40186, -80.27115), 18: (8.59331, -80.44655),
+    19: (8.33426, -80.52528), 20: (8.59308, -80.44582), 21: (8.61666, -80.11666),
+    22: (8.51959, -80.36056), 23: (8.59702, -80.44881), 24: (8.59377, -80.44295),
+    25: (8.33215, -80.51524), 26: (8.38084, -80.52890), 27: (8.20203, -80.49620),
+    28: (8.60141, -80.12923), 29: (8.62585, -80.13870),
+}
+
 
 # ARISTAS CON DATOS ESTIMADOS DESDE GOOGLE MAPS: (origen, destino, km, minutos)
 ARISTAS_RAW = [
@@ -174,15 +187,18 @@ ARISTAS_RAW = [
     (15, 12, 4.6, 9),     # PEN → ISJ
     (15, 14, 4.6, 9),     # PEN → BLM
     (15, 21, 42.9, 78),   # PEN → CGA
+    (15, 19, 36.9, 34),   # PEN → NAT
+    (15, 13, 39.7, 62),   # PEN → CLY
+
 
     # Antón (ANT) → Conexiones originales
     (17, 1, 23.1, 25),    # ANT → PSC
     (17, 2, 21.4, 25),    # ANT → PFA
     (17, 4, 19.8, 22),    # ANT → PBL
     (17, 5, 18.0, 24),    # ANT → PJH
-    (17, 6, 37.6, 59),    # ANT → MAV
-    (17, 7, 35.3, 62),    # ANT → SMT
-    (17, 21, 40.5, 61),   # ANT → CGA
+    (17, 6, 37.6, 52),    # ANT → MAV
+    (17, 7, 39.8, 57),    # ANT → SMT
+    (17, 21, 40.5, 59),   # ANT → CGA
 
     # Playas (Conexiones costeras)
     (1, 2, 6.8, 11),      # PSC → PFA
@@ -195,9 +211,9 @@ ARISTAS_RAW = [
     (6, 21, 2.9, 7),      # MAV → CGA
 
     # Natá (NAT) → Conexiones originales
-    (19, 10, 28.7, 37),   # NAT → SAC
-    (19, 17, 66.0, 66),   # NAT → ANT
-    (19, 16, 19.4, 31),   # NAT → AGU
+    (19, 10, 13.5, 14),   # NAT → SAC
+    (19, 17, 50.5, 42),   # NAT → ANT
+    (19, 16, 14.2, 15),   # NAT → AGU
 
     # Aguadulce (AGU) → Conexiones originales
     (16, 10, 26.8, 27),   # AGU → SAC
@@ -227,9 +243,11 @@ ARISTAS_RAW = [
 
     # NUEVOS NODOS - Natá
     (10, 25, 13.8, 15),   # SAC → ISA
-    (19, 25, 16.0, 28),   # NAT → ISA
-    (25, 26, 11.4, 13),   # ISA → ECO
-    (19, 26, 26.3, 35),   # NAT → ECO
+    (19, 25, 1.4, 4),   # NAT → ISA
+    (25, 26, 6.2, 7),   # ISA → ECO
+    (19, 26, 5.9, 6),   # NAT → ECO
+    (10, 26, 7.6, 9),   # SAC → ECO
+    (6, 28, 0.65, 2),   # MAV → MAR
 
     # NUEVOS NODOS - Aguadulce
     (16, 27, 8.7, 15),    # AGU → SAL
@@ -237,8 +255,8 @@ ARISTAS_RAW = [
     (27, 11, 7.0, 10),    # SAL → MSS
 
     # NUEVOS NODOS - Antón
-    (17, 28, 33.7, 56),   # ANT → MAR
-    (17, 29, 39.1, 56),   # ANT → CAN
+    (17, 28, 38.2, 53),   # ANT → MAR
+    (17, 29, 39.1, 54),   # ANT → CAN
     (28, 7, 2.1, 5),      # MAR → SMT
     (28, 29, 3.6, 9),    # MAR → CAN
     (29, 21, 5.8, 12),    # CAN → CGA
@@ -1079,7 +1097,7 @@ def evaluar_validacion_externa(G, archivo="validacion_externa_plantilla.csv",
     return res
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 6. PRUEBAS DE TIEMPO DE EJECUCIÓN (Tabla 9 – 3.6.3.c)
+# 6. PRUEBAS DE TIEMPO DE EJECUCIÓN (Tabla 11 – 3.6.3.c)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def probar_tiempo_ejecucion(G, iteraciones=10, semilla=123):
@@ -1109,7 +1127,7 @@ def probar_tiempo_ejecucion(G, iteraciones=10, semilla=123):
     filas.sort(key=lambda f: (f[0], f[5] != "aleatorio"))
 
     print("\n" + "=" * 78)
-    print("  PRUEBA DE TIEMPO DE EJECUCIÓN – TABLA 9 (3.6.3.c)")
+    print("  PRUEBA DE TIEMPO DE EJECUCIÓN – TABLA 11 (3.6.3.c)")
     print(f"  Dijkstra desde todos los nodos | {iteraciones} repeticiones | semilla {semilla}")
     print("=" * 78)
     print(f"  {'Nodos':<8} {'Aristas':<9} {'Media (s)':>11} {'Desv. est.':>11} {'Mínimo (s)':>11}  Grafo")
@@ -1383,7 +1401,7 @@ def submenu_pruebas(G, matrices, caminos):
     print("""
   [1]  b) Integridad de datos (automática)
   [2]  a) Caja negra automática + verificación contra networkx/Floyd-Warshall
-  [3]  c) Tiempos de ejecución (Tabla 9)
+  [3]  c) Tiempos de ejecución (Tabla 11)
   [4]  Volver
 """)
     op = input("  Opción: ").strip()
@@ -1403,6 +1421,7 @@ def menu_principal():
   \033[1;36m╔══════════════════════════════════════════════════════════════╗
   ║   RUTAS TURÍSTICAS – PROVINCIA DE COCLÉ, PANAMÁ            ║
   ║   Algoritmo de Dijkstra | Universidad de Panamá            ║
+  ║   Fac. de Ciencias Naturales y Exactas – Matemáticas       ║
   ║   7 DÍAS · 29 NODOS · CRITERIO OFICIAL: DISTANCIA          ║
   ╚══════════════════════════════════════════════════════════════╝\033[0m
 
