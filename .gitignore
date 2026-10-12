@@ -1,0 +1,6 @@
+git init
+git add .gitignore LICENSE README.md requirements.txt rutas_cocle_dijkstra.py
+git commit -m "Versión inicial: optimización de rutas turísticas Coclé (Dijkstra, 29 nodos, 57 aristas)"
+git remote add origin https://github.com/jc5536201-droid/optimizacion-rutas-turisticas-cocle.git
+git branch -M main
+git push -u origin main
